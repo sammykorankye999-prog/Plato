@@ -1,0 +1,15 @@
+{
+  "name": "local-role-login",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "run-local": "node start.mjs",
+    "bootstrap-admin": "node server.mjs bootstrap-admin",
+    "web:dev": "npm --prefix web run dev",
+    "web:build": "npm --prefix web run build",
+    "mobile:start": "npm --prefix mobile start"
+  },
+  "engines": { "node": ">=22.13" }
+}

@@ -1,0 +1,14 @@
+data/
+.env*
+!.env.example
+!**/.env.example
+*.sqlite
+*.sqlite-*
+.vercel/
+web/.next/
+web/node_modules/
+mobile/.expo/
+mobile/node_modules/
+mobile/.npm-cache/
+mobile/dist/
+supabase/.temp/

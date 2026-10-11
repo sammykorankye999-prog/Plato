@@ -1,0 +1,4 @@
+project_id = "secure-login-system"
+
+[functions.manage-users]
+verify_jwt = true
