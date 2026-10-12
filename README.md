@@ -85,7 +85,7 @@ Set the two `EXPO_PUBLIC_` values in `mobile/.env` before starting. Run Expo com
 
 Cloud authentication needs a connection. Once signed in, the mobile app can queue new records locally in SQLCipher; the server accepts them only after reconnecting and rechecking MFA and role policies. Offline account management and remote record browsing are unavailable. A user disabled while offline may still make local queue entries, but cannot sync them.
 
-This scaffold has no account recovery UX, no email-change flow, and only starter audit retention. Before production, configure a real email provider, review OAuth redirect allow-lists, validate RLS and Edge Function behavior, add recovery and factor-reset procedures, define retention/backups, and conduct a security review. Do not deploy with placeholder project values.
+This scaffold has no account recovery UX, no email-change flow, and only starter audit retention. Supabase dashboard backup coverage is plan-dependent and is not configured by this repository; confirm it under Database > Backups, keep encrypted off-site exports where required, back up Storage objects separately, and rehearse restoration. Before production, configure a real email provider, review OAuth redirect allow-lists, validate RLS and Edge Function behavior, add recovery and factor-reset procedures, define retention, and conduct a security review. Do not deploy with placeholder project values.
 
 ## Earlier local prototype
 

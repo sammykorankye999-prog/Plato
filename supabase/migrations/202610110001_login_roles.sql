@@ -13,19 +13,6 @@ create table public.user_roles (
   created_at timestamptz not null default now()
 );
 
--- Assign new Auth identities the least-privileged application role by default.
-create or replace function public.handle_new_auth_user()
-returns trigger language plpgsql security definer set search_path = '' as $$
-begin
-  if new.email is null then raise exception 'An email address is required for an application account'; end if;
-  insert into public.user_roles(user_id,email,role) values(new.id,lower(new.email),'inputer');
-  return new;
-end;
-$$;
-revoke all on function public.handle_new_auth_user() from public, anon, authenticated;
-create trigger on_auth_user_created_assign_default_role after insert on auth.users
-for each row execute function public.handle_new_auth_user();
-
 -- Every self-registered or OAuth identity starts with the least-privileged role.
 -- Clients cannot write this table; elevation stays in the checked admin function.
 create or replace function public.handle_new_auth_user()
@@ -43,6 +30,7 @@ $$;
 
 revoke all on function public.handle_new_auth_user() from public, anon, authenticated;
 
+drop trigger if exists on_auth_user_created_assign_default_role on auth.users;
 create trigger on_auth_user_created_assign_default_role
   after insert on auth.users
   for each row execute function public.handle_new_auth_user();

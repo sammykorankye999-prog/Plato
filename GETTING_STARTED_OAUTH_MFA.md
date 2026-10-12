@@ -54,3 +54,7 @@ npm.cmd run web:dev
 Open `http://localhost:3000`, select **Create account**, and register an email/password, or select **Sign in** and use Google. Complete email confirmation if prompted, then scan the authenticator QR code and enter its six-digit code. Google OAuth will not work until the Google and Supabase provider settings above are complete.
 
 For local registration, keep Supabase's email confirmation setting enabled unless you have configured a trusted email provider. Supabase's default test email service is limited and should not be used for production.
+
+## 5. Check automatic backups
+
+In the Supabase dashboard, open **Database → Backups** and confirm the backup schedule and retention available for your plan. Supabase provides daily backups on eligible paid plans; availability and retention vary by plan. For a free-tier project, schedule regular `supabase db dump` exports and store them encrypted in private off-site storage, never in a public GitHub repository. If you need recovery to a point between daily backups, review the paid Point-in-Time Recovery add-on and its cost in the Supabase dashboard. Database backups do not include files stored through Supabase Storage; back those files up separately. Periodically test restoring to a separate project. The repository cannot turn these dashboard settings on automatically.

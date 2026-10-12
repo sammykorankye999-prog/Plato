@@ -37,6 +37,9 @@ Supabase Postgres is the authoritative online database. Browser and mobile clien
 
 The development server is local; production web traffic is served by Vercel over HTTPS. Supabase manages the API-to-database connection. If a trusted server later connects directly to Postgres, use TLS with certificate validation and a least-privileged database role. Keep production and preview project credentials separate, restrict OAuth redirect URLs to known domains and the Expo app scheme, and rotate any secret that is exposed.
 
+### Automated backups and recovery
+On eligible Supabase plans, daily database backups are available in **Database → Backups**; retention depends on the plan. Free-tier projects should export regularly with the Supabase CLI and keep encrypted copies off-site, never in a public repository. For a smaller recovery window, evaluate the paid Point-in-Time Recovery add-on and its compute and retention costs. Database backups do not include uploaded Storage objects, so back those up separately. Assign an owner to check backup status and periodically rehearse restoration in a separate project. This application repository does not itself configure the hosted project's backup schedule.
+
 ### Balancing access and security
 Keep routine entry to a few steps: email or Google sign-in, one TOTP check, then a focused entry screen. Remember the signed-in session securely on the device, but require fresh authentication for account deactivation, role changes, and MFA reset. Use accessible code entry, short-lived challenges, rate limits, clear recovery instructions, and generic sign-in errors. Offline mode stores only pending entries in encrypted local SQLite; show which entries are waiting to sync and report authorization failures clearly. Never treat offline data as accepted until the server confirms it.
 
@@ -45,7 +48,7 @@ Keep routine entry to a few steps: email or Google sign-in, one TOTP check, then
 2. Configure Google OAuth in Google Cloud and Supabase. Register Vercel production/preview URLs and the Expo deep-link redirect in the Supabase allow-list.
 3. Run the web app locally with the Supabase URL and publishable key. Configure the Supabase Edge Function secret and allowed web origin; deploy the function.
 4. Deploy the `web` directory to Vercel. Build the Expo development client with SQLCipher enabled; test Google redirect, TOTP enrollment/challenge, and encrypted offline queue on real iOS and Android builds.
-5. Before production, verify denied as well as allowed role cases, AAL1 rejection, invited-account onboarding, deactivation, recovery, sync conflicts, backups, and secret separation. Review Supabase RLS and deployment settings.
+5. In Supabase **Database → Backups**, confirm the project's backup coverage and retention; configure an encrypted off-site export or PITR where the recovery target requires it. Back up Storage objects separately and rehearse a restore. Before production, verify denied as well as allowed role cases, AAL1 rejection, invited-account onboarding, deactivation, recovery, sync conflicts, and secret separation. Review Supabase RLS and deployment settings.
 
 ### References
 [Supabase password security](https://supabase.com/docs/guides/auth/password-security) — bcrypt and per-password salt.
@@ -54,5 +57,6 @@ Keep routine entry to a few steps: email or Google sign-in, one TOTP check, then
 [Supabase with Expo social auth](https://supabase.com/docs/guides/auth/quickstarts/with-expo-react-native-social-auth) — Google OAuth on mobile.
 [Expo SQLite / SQLCipher](https://docs.expo.dev/versions/latest/sdk/sqlite/) — encrypted on-device data.
 [Vercel environment variables](https://vercel.com/docs/environment-variables) — deployment configuration.
+[Supabase database backups](https://supabase.com/docs/guides/platform/backups) — plan-dependent daily backups, PITR, and restore guidance.
 
 **Implementation proposal — authorize the initial administrator, Google OAuth application, Supabase project, and Vercel deployment owner before production release.**
