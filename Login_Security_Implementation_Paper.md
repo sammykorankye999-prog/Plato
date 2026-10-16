@@ -14,6 +14,8 @@ Allow self-registration with email/password or Google, but assign every new iden
 
 Require a verified TOTP factor before granting access to any role. After password or Google OAuth sign-in, users without a verified factor enroll by scanning a Supabase-generated QR code; returning users complete a TOTP challenge. Only an **AAL2** session may access application tables or privileged actions. Google is an alternative first sign-in method, not a replacement for the second factor. A secure recovery and factor-reset process must verify identity and revoke old sessions.
 
+Users can change a password after signing in by confirming the current password, or request a reset link by email. Reset links return to the current application origin, which must be allow-listed in Supabase Auth. After a reset, the user signs in again and completes TOTP MFA.
+
 ### Roles and least-privilege permissions
 The role is stored in a protected `user_roles` table. Users cannot change their own role. RLS is enabled on every application table and defaults to denying access.
 

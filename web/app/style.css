@@ -44,6 +44,10 @@ h2{font-size:20px;letter-spacing:-.03em;margin:0 0 17px}
 .google-button:hover:not(:disabled){background:#fbfaff}
 .google-mark{font:800 16px Arial,sans-serif;color:#4285f4}
 .panel-foot{margin:21px 0 0;text-align:center;color:#89889a;font-size:10px}
+.text-button{display:block;min-height:auto;margin:12px auto 0;padding:4px;background:transparent;color:var(--violet-dark);font-size:12px}
+.text-button:hover:not(:disabled){transform:none;background:transparent;box-shadow:none;text-decoration:underline}
+.back-button{margin-top:12px;background:#eeecf8;color:#5140bd}
+.password-card{max-width:620px;margin:16px 0}
 .signup-notice{margin:16px 0;padding:12px 14px;border:1px solid #cbeadd;border-radius:11px;background:#f0fbf6;color:#27644d;font-size:12px;line-height:1.55}
 .invite-note{display:flex;gap:13px;margin:22px 0;padding:17px;border:1px solid #e8e3fb;border-radius:14px;background:linear-gradient(135deg,#f7f5ff,#f5fbf9)}
 .invite-note>span{font-size:20px;color:var(--violet)}

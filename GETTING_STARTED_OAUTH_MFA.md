@@ -11,7 +11,7 @@ New accounts may register with email and password or continue with Google. The d
    - Local web: `http://localhost:3000/**`
    - Vercel: `https://YOUR-APP.vercel.app/**`
    - Expo development app: `secureworkspace://auth/callback`
-5. In `web/.env.local`, set your project's URL and publishable key. For local use set `NEXT_PUBLIC_APP_URL=http://localhost:3000`.
+5. In `web/.env.local`, set your project's URL and publishable key. The app automatically uses the current origin for auth redirects; allow both your local URL and deployed site in Supabase.
 
 Apply both SQL files in order if this is a new database: first `supabase/migrations/202610110001_login_roles.sql`, then `supabase/migrations/202610120001_self_signup.sql`. If you already applied the first migration, apply only the second. It creates the default-role trigger and gives any previously unassigned Auth accounts the limited `inputer` role. Never let frontend code update `user_roles` directly.
 
@@ -24,7 +24,7 @@ Apply both SQL files in order if this is a new database: first `supabase/migrati
 5. In the Google OAuth client, add that exact Supabase URL under **Authorized redirect URIs**. It typically looks like `https://YOUR_PROJECT_REF.supabase.co/auth/v1/callback`.
 6. Copy the Google **Client ID** and **Client secret** into the Supabase Google provider settings, then enable the provider. Do not put the Google client secret in this app's `.env` files.
 7. In the Google OAuth client's **Authorized JavaScript origins**, add `http://localhost:3000` for local web and `https://YOUR-APP.vercel.app` for production web. Use your real domains.
-8. Keep the Supabase redirect allow-list from step 1 up to date. For local web, `NEXT_PUBLIC_APP_URL` must be `http://localhost:3000`; for production, set it to your Vercel URL.
+8. Keep the Supabase redirect allow-list from step 1 up to date. The app uses the current browser origin for auth redirects, so it does not require an app URL environment variable.
 9. Start the web app and choose **Continue with Google**. Google confirms your identity, then redirects through Supabase back to the app. New Google users receive the default `inputer` role from the database trigger.
 
 For Expo, also register the `secureworkspace://auth/callback` redirect in Supabase. Google still redirects first to Supabase's callback; Supabase then returns to the Expo deep link. Build and test the native app separately because its SQLCipher configuration is not included in Expo Go.
@@ -55,6 +55,12 @@ Open `http://localhost:3000`, select **Create account**, and register an email/p
 
 For local registration, keep Supabase's email confirmation setting enabled unless you have configured a trusted email provider. Supabase's default test email service is limited and should not be used for production.
 
-## 5. Check automatic backups
+## 5. Change or reset a password
+
+To change a password while signed in, open **Change password** in the workspace, enter the current password, then enter and confirm the new password. The app asks Supabase Auth to validate the current password before changing it.
+
+If you forgot the password, select **Forgot password?** on the sign-in screen, enter the account email, and request a reset link. Open the latest email on the same deployed site, set and confirm a new password, then sign in again and complete TOTP MFA. The response intentionally does not reveal whether the email is registered. In Supabase **Authentication → URL Configuration**, allow both `http://localhost:3000/**` for local development and your production Vercel domain (for example, `https://your-app.vercel.app/**`). Reset links use the site origin where the request was made. If an earlier email points at `localhost`, request a fresh one after deploying the updated app.
+
+## 6. Check automatic backups
 
 In the Supabase dashboard, open **Database → Backups** and confirm the backup schedule and retention available for your plan. Supabase provides daily backups on eligible paid plans; availability and retention vary by plan. For a free-tier project, schedule regular `supabase db dump` exports and store them encrypted in private off-site storage, never in a public GitHub repository. If you need recovery to a point between daily backups, review the paid Point-in-Time Recovery add-on and its cost in the Supabase dashboard. Database backups do not include files stored through Supabase Storage; back those files up separately. Periodically test restoring to a separate project. The repository cannot turn these dashboard settings on automatically.

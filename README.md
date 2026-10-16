@@ -53,20 +53,20 @@ The Supabase cloud app requires your own Supabase project. In PowerShell, from t
 Copy-Item web/.env.example web/.env.local
 ```
 
-Edit `web/.env.local` with the Supabase project URL, publishable key, and local app URL, then:
+Edit `web/.env.local` with the Supabase project URL and publishable key, then:
 
 ```powershell
 npm --prefix web install
 npm run web:dev
 ```
 
-Open `http://localhost:3000`. In Supabase Auth URL configuration allow `http://localhost:3000` during development. The web page supports password sign-in, Google OAuth, required TOTP enrollment/challenge, record entry, and manager invitations. Admins can deactivate inputers and administrators can assign roles through the server function. The database role directory is intentionally not exposed to browser clients.
+Open `http://localhost:3000`. In Supabase Auth URL configuration allow `http://localhost:3000/**` during development. The app uses the current site origin for confirmation, OAuth, and password reset redirects, so no `NEXT_PUBLIC_APP_URL` is needed. The web page supports password sign-in, reset/change password, Google OAuth, required TOTP enrollment/challenge, record entry, and manager invitations. Admins can deactivate inputers and administrators can assign roles through the server function. The database role directory is intentionally not exposed to browser clients.
 
 To start the earlier single-computer SQLite prototype instead, run `npm run run-local` from this project root and follow its terminal prompts. It is separate from the Supabase account system.
 
 ## Deploy the web app to Vercel
 
-Import the repository into Vercel and set **Root Directory** to `web`. Add `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` for Preview and Production, then deploy. These are publishable client values; RLS provides the data boundary. Add the final Vercel domain to Supabase Auth redirects and the Edge Function `APP_ORIGINS` allow-list.
+Import the repository into Vercel and set **Root Directory** to `web`. Add `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` for Preview and Production, then deploy. These are publishable client values; RLS provides the data boundary. Add the final Vercel domain to Supabase Auth redirects and the Edge Function `APP_ORIGINS` allow-list. The app automatically redirects to the origin currently in use; do not set a production auth redirect to `localhost`.
 
 ## Run/build the Expo app
 
