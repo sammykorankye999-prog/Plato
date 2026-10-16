@@ -1,0 +1,102 @@
+name: Supabase off-site backup
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 2 * * *'
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: supabase-offsite-backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    if: ${{ vars.AWS_BACKUP_ROLE_ARN != '' && vars.AWS_REGION != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Configure AWS access with GitHub OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_BACKUP_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Read database connection from Secrets Manager
+        env:
+          SECRET_ARN: ${{ vars.AWS_SUPABASE_DATABASE_SECRET_ARN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          secret_json="$(aws secretsmanager get-secret-value --secret-id "$SECRET_ARN" --query SecretString --output text)"
+          database_url="$(python -c 'import json,sys; print(json.loads(sys.stdin.read())["database_url"])' <<< "$secret_json")"
+          echo "::add-mask::$database_url"
+          echo "SUPABASE_DB_URL=$database_url" >> "$GITHUB_ENV"
+          unset secret_json database_url
+
+      - name: Create encrypted logical backup and audit record
+        env:
+          BACKUP_BUCKET: ${{ vars.AWS_BACKUP_BUCKET }}
+          BACKUP_KMS_KEY_ARN: ${{ vars.AWS_BACKUP_KMS_KEY_ARN }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes postgresql-client
+          run_id="$(date -u +%Y%m%dT%H%M%SZ)-${GITHUB_RUN_ID}"
+          prefix="daily/${run_id}"
+          mkdir -p "$RUNNER_TEMP/db-backup"
+          cd "$RUNNER_TEMP/db-backup"
+          audit_id=""
+          finish_failure() {
+            exit_code=$?
+            if [[ $exit_code -ne 0 && -n "$audit_id" ]]; then
+              psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -v audit_id="$audit_id" \
+                -c "update public.backup_runs set status='failed', completed_at=now(), details=details || jsonb_build_object('workflow_run','${GITHUB_RUN_ID}') where id=:'audit_id'" \
+                >/dev/null 2>&1 || true
+            fi
+            exit "$exit_code"
+          }
+          trap finish_failure EXIT
+
+          audit_id="$(psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -At \
+            -c "insert into public.backup_runs(provider,backup_kind,status,details) values ('aws_s3','database','started',jsonb_build_object('workflow_run','${GITHUB_RUN_ID}')) returning id")"
+
+          supabase db dump --db-url "$SUPABASE_DB_URL" --file roles.sql --role-only
+          supabase db dump --db-url "$SUPABASE_DB_URL" --file schema.sql
+          supabase db dump --db-url "$SUPABASE_DB_URL" --file data.sql --data-only --use-copy \
+            --exclude storage.buckets_vectors --exclude storage.vector_indexes
+
+          sha256sum roles.sql schema.sql data.sql > SHA256SUMS
+          python - "$run_id" <<'PY'
+          import json, sys
+          from datetime import datetime, timezone
+          manifest = {
+              "run_id": sys.argv[1],
+              "created_at": datetime.now(timezone.utc).isoformat(),
+              "files": ["roles.sql", "schema.sql", "data.sql", "SHA256SUMS"],
+              "restore_note": "Logical application database backup. Restore to an isolated Supabase project first; managed Auth/Storage data and objects require their own Supabase backup procedures."
+          }
+          with open("manifest.json", "w", encoding="utf-8") as handle:
+              json.dump(manifest, handle, indent=2)
+          PY
+
+          aws s3 cp . "s3://${BACKUP_BUCKET}/${prefix}/" --recursive \
+            --sse aws:kms --sse-kms-key-id "$BACKUP_KMS_KEY_ARN"
+          checksum="$(sha256sum roles.sql schema.sql data.sql | sha256sum | cut -d ' ' -f 1)"
+          psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -v audit_id="$audit_id" \
+            -v artifact_key="$prefix/" -v checksum="$checksum" \
+            -c "update public.backup_runs set status='succeeded', completed_at=now(), artifact_key=:'artifact_key', checksum_sha256=:'checksum', details=details || jsonb_build_object('workflow_run','${GITHUB_RUN_ID}','files',jsonb_build_array('roles.sql','schema.sql','data.sql','SHA256SUMS','manifest.json')) where id=:'audit_id'"
+          audit_id=""
+          echo "Backup completed: s3://${BACKUP_BUCKET}/${prefix}/"

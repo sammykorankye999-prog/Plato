@@ -1,92 +1,110 @@
-# Secure Login and Role-Based Access
+# Secure Workspace
 
-This workspace contains a cloud-backed web/mobile implementation plus a separate single-computer Node prototype. The Supabase/Vercel/Expo implementation is under `web/`, `supabase/`, and `mobile/`. The root `server.mjs` is a local SQLite prototype and does not connect to Supabase.
+Secure Workspace is a role-based records app. The cloud project uses Next.js/Vercel, Supabase Auth/Postgres, and Expo/React Native. The root `server.mjs` and `start.mjs` are an older local SQLite prototype and do not connect to Supabase.
 
-The two-page implementation paper is available as [Markdown](Login_Security_Implementation_Paper.md) and [print-formatted HTML](Login_Security_Implementation_Paper.html). Regenerate the HTML after editing the paper with `node render-paper.mjs`. See [OAuth and MFA setup](GETTING_STARTED_OAUTH_MFA.md) for signup, Google provider, and QR-code instructions.
+The implementation paper is in [Markdown](Login_Security_Implementation_Paper.md) and [print-formatted HTML](Login_Security_Implementation_Paper.html). Regenerate the HTML after editing with `node render-paper.mjs`. OAuth, email confirmation, and TOTP enrollment steps are in [GETTING_STARTED_OAUTH_MFA.md](GETTING_STARTED_OAUTH_MFA.md).
 
-## Cloud implementation
+## What is implemented
 
-- **Web:** Next.js, with Vercel project root set to `web/`.
-- **Mobile:** Expo / React Native in `mobile/`, using Supabase OAuth for Google sign-in.
-- **Identity and MFA:** Supabase Auth password or Google sign-in, then required TOTP MFA. Database access is restricted to AAL2 sessions.
-- **Self-registration:** Email/password and Google registration are available. A database trigger assigns each new identity the basic `inputer` role; users cannot select or elevate their own role.
-- **Database:** Supabase Postgres with RLS. `supabase/migrations/202610110001_login_roles.sql` defines roles, records, and access policies.
-- **Privileged account actions:** `supabase/functions/manage-users/` invites inputers, deactivates inputers, and assigns roles only after server-side identity, MFA, and role checks.
-- **Offline mobile entry:** Expo SQLite configured for SQLCipher stores only pending inputs. Supabase remains authoritative; it checks the user's active role and MFA when a queued record syncs.
+- Web app in `web/`, deployed through Vercel with project root `web/`. It works in desktop browsers and has an installable PWA shell. Its service worker is network-only and does not cache authenticated screens or records.
+- Mobile app in `mobile/`, built with Expo and React Native. It uses Google OAuth, TOTP MFA, and an encrypted SQLCipher queue for unsent records.
+- Supabase Auth handles email/password and Google identity, sessions, password recovery, and TOTP. SQL RLS requires an AAL2 session before protected data access.
+- New accounts receive the least-privileged `inputer` role. Users cannot grant themselves roles.
+- Four roles exist: `inputer`, `manager`, `admin`, and `administrator`. Inputers manage their own records. Managers can invite inputers. Admins can review team records, the user directory, audit history, and deactivate inputers. Administrators can assign roles and change versioned workspace settings.
+- Web and mobile have role-specific dashboard views. Team records can be paged. Database policies and the `manage-users` Edge Function enforce privileges; hiding a UI control is not the security boundary.
+- `audit_events` records invitations, deactivations, role changes, and configuration changes/restores. The new `backup_runs` table records backup status and artifact metadata.
+- Workspace configuration history covers maintenance mode, offline queue availability, and maximum record length. An administrator can restore a version without changing `inputs`. This does not restore Vercel environment variables or Supabase provider configuration.
 
-Supabase Auth manages password hashes using bcrypt and per-password random salts. This application does not store passwords or implement a custom pepper. Supabase-managed passwords cannot safely accept an application pepper through its supported login flow. A strict pepper requirement would require a separately managed identity system.
+### Password salt and pepper
 
-## Configure Supabase
+Real accounts stay in Supabase Auth, which stores password hashes using bcrypt and a per-password random salt. This project does not add a custom pepper to Supabase authentication; that login flow does not support an application pepper.
 
-1. Create a Supabase project and save its project URL and **publishable key**.
-2. In the Supabase SQL editor, apply `supabase/migrations/202610110001_login_roles.sql`.
-3. In Auth settings, enable email sign-ups and TOTP MFA. Keep email confirmation enabled and configure a real email provider before production. The trigger in `202610120001_self_signup.sql` gives each new Auth user the least-privileged `inputer` role; administrators can elevate roles. TOTP AAL2 is required in SQL policies, so UI-only bypasses cannot read or change records.
-4. Create your first account in the web app, confirm the email, and enroll TOTP. Copy that Auth user's UUID from **Authentication → Users**, then promote this one account in SQL Editor:
+For an isolated class demonstration, `examples/salt-pepper-demo.mjs` uses a unique random salt per record, HMAC-SHA-256 keyed by a pepper, and scrypt as the slow password hashing step. The output record contains the salt and hash, never the pepper. Do not use the demo to create or authenticate real accounts or to create a second password database. In production, keep any pepper in a server-side secret manager, never in a client or database.
 
-   ```sql
-   update public.user_roles
-   set role = 'administrator'
-   where user_id = 'AUTH-USER-UUID-HERE';
-   ```
+Run the demonstration in PowerShell with demo-only values:
 
-   Replace the UUID with your Auth user's ID. After the first admin is enrolled, use the checked management function to add users; do not grant browser clients write access to `user_roles`.
+```powershell
+$pepperBytes = New-Object byte[] 32
+[Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($pepperBytes)
+$env:PASSWORD_PEPPER = [BitConverter]::ToString($pepperBytes).Replace('-', '')
+$env:DEMO_PASSWORD = Read-Host 'Demo password (12 or more characters; do not use a real password)'
+node examples/salt-pepper-demo.mjs
+Remove-Item Env:PASSWORD_PEPPER, Env:DEMO_PASSWORD
+```
 
-5. Configure Google OAuth in Google Cloud. Set Supabase's Auth > Google provider with the Google Web Client ID and secret. Add Supabase's Google callback URL to Google Cloud. In Supabase Auth URL configuration, allow the deployed Vercel web URL and `secureworkspace://auth/callback` for mobile. Use the exact production and preview redirects you need.
-6. Deploy the Edge Function with Supabase CLI. Link the project, set its protected secrets, then deploy:
+## Apply Supabase migrations
 
-   ```powershell
-   npx supabase login
-   npx supabase link --project-ref YOUR_PROJECT_REF
-   npx supabase secrets set WEB_ORIGIN=https://YOUR_APP.vercel.app APP_ORIGINS=https://YOUR_APP.vercel.app
-   npx supabase functions deploy manage-users
-   ```
+In Supabase SQL Editor, apply the SQL files in this order:
 
-   Add approved preview origins to `APP_ORIGINS` as a comma-separated allow-list. Supabase injects the API key variables into the Edge Function. Never put a secret/service-role key into Vercel's public environment or the mobile app.
+1. `supabase/migrations/202610110001_login_roles.sql`
+2. `supabase/migrations/202610120001_self_signup.sql`
+3. `supabase/migrations/202610160001_backup_audit.sql`
+4. `supabase/migrations/202610160002_workspace_configuration.sql`
 
-See [Getting started: self-registration, Google OAuth, and TOTP QR enrollment](GETTING_STARTED_OAUTH_MFA.md) for the dashboard clicks, Google callback setup, and the user enrollment walkthrough.
+Enable email signup, email confirmation, and TOTP MFA in Supabase Auth. Create your first user, confirm its email, and enroll an authenticator. In Authentication > Users, copy the user's UUID, then promote that account in SQL Editor:
 
-## Run the web app locally
+```sql
+update public.user_roles
+set role = 'administrator'
+where user_id = 'AUTH-USER-UUID-HERE';
+```
 
-The Supabase cloud app requires your own Supabase project. In PowerShell, from the project root:
+Replace the placeholder with the exact UUID. Do not give browser/mobile clients write access to `user_roles`.
+
+Configure the Google provider in Google Cloud and Supabase. Allow the deployed Vercel callback/redirect and `secureworkspace://auth/callback` in Supabase Auth URL configuration. Deploy the privileged Edge Function:
+
+```powershell
+npx supabase login
+npx supabase link --project-ref YOUR_PROJECT_REF
+npx supabase secrets set WEB_ORIGIN=https://YOUR_APP.vercel.app APP_ORIGINS=https://YOUR_APP.vercel.app
+npx supabase functions deploy manage-users
+```
+
+Keep the service-role secret in Supabase's protected function environment. Never put it in Vercel public variables, browser code, mobile packages, or Git.
+
+## Run and deploy the web app
+
+In PowerShell from the repository root:
 
 ```powershell
 Copy-Item web/.env.example web/.env.local
+npm.cmd --prefix web install
+npm.cmd run web:dev
 ```
 
-Edit `web/.env.local` with the Supabase project URL and publishable key, then:
+Put the Supabase project URL and publishable key in `web/.env.local`. Open `http://localhost:3000` and allow that URL in Supabase Auth redirects during development. The app uses its current origin for confirmation, Google sign-in, and password recovery redirects.
+
+For Vercel, import the GitHub repository and set **Root Directory** to `web`. Set `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` for Preview and Production. Add the deployed Vercel domain to Supabase Auth redirects and the Edge Function origin allow-list. These two `NEXT_PUBLIC_` values are publishable; never use the prefix for a secret.
+
+## Run the Expo app
+
+Set `EXPO_PUBLIC_SUPABASE_URL` and `EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY` in `mobile/.env`, then run from PowerShell:
 
 ```powershell
-npm --prefix web install
-npm run web:dev
+npm.cmd --prefix mobile install
+npm.cmd --prefix mobile start
 ```
 
-Open `http://localhost:3000`. In Supabase Auth URL configuration allow `http://localhost:3000/**` during development. The app uses the current site origin for confirmation, OAuth, and password reset redirects, so no `NEXT_PUBLIC_APP_URL` is needed. The web page supports password sign-in, reset/change password, Google OAuth, required TOTP enrollment/challenge, record entry, and manager invitations. Admins can deactivate inputers and administrators can assign roles through the server function. The database role directory is intentionally not exposed to browser clients.
+For a native development build, use `npx expo prebuild` and `npx expo run:android`; iOS builds require macOS. SQLCipher is enabled, so Expo Go is not suitable. Change the example app identifiers in `mobile/app.json` before release.
 
-To start the earlier single-computer SQLite prototype instead, run `npm run run-local` from this project root and follow its terminal prompts. It is separate from the Supabase account system.
+Cloud sign-in and authorization require a network connection. Offline mobile mode only queues new records locally; Supabase re-checks MFA and active roles when records sync. A disabled user cannot sync. Offline mode is not offline authentication.
 
-## Deploy the web app to Vercel
+## Automated off-site backups on AWS
 
-Import the repository into Vercel and set **Root Directory** to `web`. Add `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` for Preview and Production, then deploy. These are publishable client values; RLS provides the data boundary. Add the final Vercel domain to Supabase Auth redirects and the Edge Function `APP_ORIGINS` allow-list. The app automatically redirects to the origin currently in use; do not set a production auth redirect to `localhost`.
+The repo now contains a daily GitHub Actions workflow at `.github/workflows/supabase-offsite-backup.yml`, an AWS CloudFormation template at `aws-backup/github-oidc-stack.yaml`, and a setup guide at [aws-backup/README.md](aws-backup/README.md). The planned storage is a private, versioned S3 bucket encrypted with a customer-managed KMS key. GitHub uses OIDC short-lived credentials and reads the database URI from Secrets Manager; no long-lived AWS key is required in GitHub.
 
-## Run/build the Expo app
+The AWS part is not active until you create the AWS account, enable MFA for its root identity, create the OIDC provider and database secret, deploy the stack, configure GitHub repository variables, and run the workflow. Apply migrations 3 and 4 above first. The workflow runs daily at 02:00 UTC, stores SQL logical dumps and a checksum manifest in S3, and writes a row to `public.backup_runs`. The template uses a 90-day object retention period; verify it meets your requirements.
 
-From PowerShell:
+This off-site logical archive is not a complete Supabase project snapshot. Auth/Storage managed schemas and Storage object files have separate backup procedures. Restore the archive only under a recovery plan and into a staging project first. Database recovery may roll back or replace user records.
 
-```powershell
-Copy-Item mobile/.env.example mobile/.env
-npm --prefix mobile install
-npx expo prebuild
-npx expo run:android
-```
+Configuration-only restore is different: it restores only the versioned in-app settings described above and leaves `public.inputs` unchanged. Vercel environment variables and Supabase OAuth/email provider settings must be backed up and restored separately.
 
-Set the two `EXPO_PUBLIC_` values in `mobile/.env` before starting. Run Expo commands from the `mobile` directory. For iOS, build on macOS with `npx expo run:ios`. Change the example bundle/package identifiers in `app.json` before release. Because SQLCipher is enabled by app configuration, use a native development build; Expo Go does not include SQLCipher. Google sign-in returns to the `secureworkspace://auth/callback` app link.
+## Remaining lecturer decisions and production work
 
-## Offline behavior and security limits
+- Only the four named roles are implemented. Confirm any additional role names and permissions with your lecturer before adding access rules.
+- A native Windows/macOS binary is not included; the installable desktop PWA and responsive web app are the desktop experience.
+- Create the AWS account and finish the owner-only setup. No AWS stack or successful backup run exists until then.
+- Test restore, role denials, MFA recovery, email delivery limits, and Expo builds in staging before production use.
+- Configure production email delivery, backup Storage objects separately, set retention, and review OAuth allow-lists and RLS.
 
-Cloud authentication needs a connection. Once signed in, the mobile app can queue new records locally in SQLCipher; the server accepts them only after reconnecting and rechecking MFA and role policies. Offline account management and remote record browsing are unavailable. A user disabled while offline may still make local queue entries, but cannot sync them.
-
-This scaffold has no account recovery UX, no email-change flow, and only starter audit retention. Supabase dashboard backup coverage is plan-dependent and is not configured by this repository; confirm it under Database > Backups, keep encrypted off-site exports where required, back up Storage objects separately, and rehearse restoration. Before production, configure a real email provider, review OAuth redirect allow-lists, validate RLS and Edge Function behavior, add recovery and factor-reset procedures, define retention, and conduct a security review. Do not deploy with placeholder project values.
-
-## Earlier local prototype
-
-The root `server.mjs` / `start.mjs` remain for the original local-only experiment and use a separate SQLite database and accounts. They are not connected to Supabase and must not be treated as synchronized with the cloud project.
+The root local SQLite prototype is separate from the cloud app. Do not treat its user accounts or database as synchronized with Supabase.

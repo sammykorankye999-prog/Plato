@@ -1,32 +1,32 @@
-# Secure User Login and Role-Based Access System
-## Implementation Paper | 11 October 2026
+# Secure Workspace: Authentication, Authorization, and Recovery
+## Implementation paper | 16 October 2026
 
-### Purpose
-This paper specifies a web and mobile login system for staff who enter organizational records. **Identification** gives each person a unique email-based account. **Authentication** proves the account holder's identity with a password or Google sign-in, followed by a time-based one-time password (TOTP). **Authorization** limits each authenticated person to actions assigned to their role. Every protected operation must be enforced by the database or a trusted server, not by hiding a button in the interface.
+### Purpose and platform
 
-### Platform and architecture
-Use **Next.js (React)** for the web front end and deploy it on **Vercel**. Build the mobile client with **Expo / React Native**. Use **Supabase Auth** for accounts, password sign-in, Google OAuth, sessions, and TOTP MFA; use **Supabase Postgres** as the online source of truth. Supabase Row Level Security (RLS) policies check both the user's role and MFA assurance level on every data request. A Supabase Edge Function performs privileged user invitations and deactivation. The Vercel site and mobile app use only the Supabase URL and publishable key; the Supabase secret/service-role key stays in the Edge Function's protected environment.
+This system identifies each person with a unique Supabase Auth account, authenticates the account with a password or Google sign-in followed by TOTP two-factor authentication, and authorizes actions by role. The web client is Next.js and Vercel, usable in desktop browsers and installable as a network-only PWA. The mobile client is Expo/React Native. Supabase Auth manages identity and sessions; Supabase Postgres is the authoritative records database. A local development server supports workstation development. Production web traffic uses HTTPS.
 
-For local development, run the Next.js development server on the workstation. In the Expo app, use on-device SQLite with **SQLCipher** for a small encrypted queue of unsent entries. This supports offline data capture, not a new offline login: first sign-in and online authorization require a network connection. Pending records are re-authorized by Supabase when synchronized; do not allow offline account administration or display sensitive server records from a stale cache. SQLCipher requires a native Expo development build, not Expo Go. The user's local encryption key belongs in platform secure storage.
+Browser and mobile apps use only the Supabase project URL and publishable key. Postgres Row Level Security (RLS) checks the signed-in identity, application role, active status, and MFA assurance level for protected operations. A Supabase Edge Function performs privileged invitations, deactivation, and role assignment after validating the caller. Keep its service-role credential server-side. Never ship database passwords, service-role keys, AWS credentials, or peppers in client bundles or Git.
 
 ### Identification, authentication, and password handling
-Allow self-registration with email/password or Google, but assign every new identity only the least-privileged `inputer` role through a database trigger. Users cannot select or elevate their role; administrators can grant additional roles through a checked server function. Require verified email before normal production use. Use the stable Supabase user ID as the database owner. On password sign-in, Supabase Auth manages password hashing with bcrypt and a unique random salt. The application never stores a plaintext or recoverable password and must not hash it in the browser. A separate pepper cannot be added to Supabase-managed password hashes through the supported client flow; do not invent a second password system. If organizational policy strictly requires a pepper, choose a self-managed identity service designed for it instead of wrapping or bypassing Supabase Auth.
 
-Require a verified TOTP factor before granting access to any role. After password or Google OAuth sign-in, users without a verified factor enroll by scanning a Supabase-generated QR code; returning users complete a TOTP challenge. Only an **AAL2** session may access application tables or privileged actions. Google is an alternative first sign-in method, not a replacement for the second factor. A secure recovery and factor-reset process must verify identity and revoke old sessions.
+Self-registration supports email/password and Google OAuth. A database trigger assigns new identities the least-privileged `inputer` role; users cannot choose or elevate their roles. Require email confirmation in production. Use the stable Supabase Auth UUID as the owner key for records.
 
-Users can change a password after signing in by confirming the current password, or request a reset link by email. Reset links return to the current application origin, which must be allow-listed in Supabase Auth. After a reset, the user signs in again and completes TOTP MFA.
+After first-factor authentication, require a verified TOTP factor. New users scan a Supabase-generated QR code with an authenticator application and enter a six-digit code to enroll. Returning users complete a fresh TOTP challenge. The database and privileged functions require AAL2, so a sign-in UI defect cannot bypass MFA. Google is a first-factor option, not the second factor. Password recovery and factor reset must verify account ownership and revoke old sessions.
 
-### Roles and least-privilege permissions
-The role is stored in a protected `user_roles` table. Users cannot change their own role. RLS is enabled on every application table and defaults to denying access.
+Supabase Auth stores password hashes with bcrypt and a per-password random salt. This application does not store plaintext passwords or hash real account passwords in the browser. Its supported Supabase sign-in flow does not accept a separate application pepper. The isolated `examples/salt-pepper-demo.mjs` demonstrates a random per-record salt, an HMAC-SHA-256 pre-hash keyed by a server-held pepper, and scrypt for slow key derivation. It is educational code only and is not connected to account registration or login. In a production service that requires a pepper, keep it in a server-side secret manager and use an identity platform that officially supports the design; do not create a parallel password database.
 
-| Role | Allowed actions |
+### Roles and dashboard access
+
+The protected `user_roles` table currently defines four roles. RLS defaults to denying access and the role cannot be changed by a user through the browser or phone.
+
+| Role | Permissions |
 |---|---|
-| Inputer | Create and read own entries; edit own drafts. No user administration. |
-| Manager | Inputer actions; invite new inputers by verified email. Cannot deactivate users or grant elevated roles. |
-| Admin | Review audit history and deactivate inputer accounts. Cannot deactivate managers or administrators. |
-| Administrator | Full account and role administration, policy configuration, and audit review. Limit assignment and require MFA. |
+| Inputer | Create and read own records; edit own drafts. |
+| Manager | Inputer permissions; invite inputers by verified email. No deactivation or elevated role assignment. |
+| Admin | Review team records, user directory, audit and backup history; deactivate inputer accounts. Cannot deactivate managers or administrators. |
+| Administrator | Admin permissions; assign roles and manage versioned workspace settings. Require AAL2 for every privileged action. |
 
-The manager invitation and admin deactivation actions run through an Edge Function. It validates the caller's signed-in identity, AAL2 claim, and current database role before using its secret key. Deactivation is preferred to permanent deletion so records retain their owner and audit history. Log the actor, target, action, time, and outcome without passwords, TOTP codes, or tokens.
+Web and mobile show separate dashboard views for the four roles. Admins can page through team records. User directory, configuration history, backup history, and security events are visible according to database policies. Additional roles must be named and assigned explicit permissions before adding them to the database enum or functions. Role checks in the interface support usability; RLS and trusted functions provide enforcement. Deactivation is preferred to permanent deletion so records and audit references remain intact. Record actor, target, action, time, and outcome without passwords, TOTP codes, or session tokens.
 
 **Page 1 of 2**
 
@@ -34,31 +34,34 @@ The manager invitation and admin deactivation actions run through an Edge Functi
 
 **Page 2 of 2**
 
-### Database, local server, and secure connections
-Supabase Postgres is the authoritative online database. Browser and mobile clients connect through Supabase's HTTPS APIs using a publishable key; Postgres RLS evaluates the caller's signed JWT and restricts rows. Do not put a database password or secret/service-role key in a browser bundle, mobile package, or public repository. Keep the Edge Function secret only in Supabase's protected function environment. Vercel environment settings hold only public client configuration unless a separately reviewed server-only integration is introduced. Enable MFA enforcement in the policies as well as in the sign-in screen so a UI defect cannot bypass the second factor.
+### Database, local operation, and secure connections
 
-The development server is local; production web traffic is served by Vercel over HTTPS. Supabase manages the API-to-database connection. If a trusted server later connects directly to Postgres, use TLS with certificate validation and a least-privileged database role. Keep production and preview project credentials separate, restrict OAuth redirect URLs to known domains and the Expo app scheme, and rotate any secret that is exposed.
+Supabase Postgres stores online application data. Web and mobile requests use HTTPS APIs; RLS checks the user JWT and AAL2 status. A local Next.js server is for development. The Expo app uses SQLCipher for a queue of unsent records, with its key in platform secure storage. Offline capture is not offline authentication: the server rechecks role and MFA when a queued item syncs. Offline administration and cached browsing of sensitive server records are unavailable. Do not treat a queued item as accepted until Supabase confirms it.
+
+The versioned `workspace_configuration` feature contains only app settings: maintenance mode, offline queue availability, and maximum record length. An administrator-only, AAL2-checked database function saves or restores a setting version and records an audit event. The restore touches configuration tables only; it does not update `public.inputs`. Vercel environment variables and Supabase OAuth/email-provider settings are external configuration and must be backed up separately.
 
 ### Automated backups and recovery
-On eligible Supabase plans, daily database backups are available in **Database → Backups**; retention depends on the plan. Free-tier projects should export regularly with the Supabase CLI and keep encrypted copies off-site, never in a public repository. For a smaller recovery window, evaluate the paid Point-in-Time Recovery add-on and its compute and retention costs. Database backups do not include uploaded Storage objects, so back those up separately. Assign an owner to check backup status and periodically rehearse restoration in a separate project. This application repository does not itself configure the hosted project's backup schedule.
 
-### Balancing access and security
-Keep routine entry to a few steps: email or Google sign-in, one TOTP check, then a focused entry screen. Remember the signed-in session securely on the device, but require fresh authentication for account deactivation, role changes, and MFA reset. Use accessible code entry, short-lived challenges, rate limits, clear recovery instructions, and generic sign-in errors. Offline mode stores only pending entries in encrypted local SQLite; show which entries are waiting to sync and report authorization failures clearly. Never treat offline data as accepted until the server confirms it.
+The repository contains a daily GitHub Actions workflow, a CloudFormation template, and a `backup_runs` table. When configured by the account owner, the workflow exports logical database roles/schema/data and uploads SQL files plus checksums to a private, versioned Amazon S3 bucket encrypted with a customer-managed KMS key. GitHub obtains short-lived AWS credentials through OIDC and reads the Supabase database URI from AWS Secrets Manager. Backup metadata records run status and artifact location.
 
-### Implementation and release sequence
-1. Create a Supabase project; apply the SQL migrations; self-register the initial account, complete TOTP enrollment, then promote that account through a controlled bootstrap SQL update.
-2. Configure Google OAuth in Google Cloud and Supabase. Register Vercel production/preview URLs and the Expo deep-link redirect in the Supabase allow-list.
-3. Run the web app locally with the Supabase URL and publishable key. Configure the Supabase Edge Function secret and allowed web origin; deploy the function.
-4. Deploy the `web` directory to Vercel. Build the Expo development client with SQLCipher enabled; test Google redirect, TOTP enrollment/challenge, and encrypted offline queue on real iOS and Android builds.
-5. In Supabase **Database → Backups**, confirm the project's backup coverage and retention; configure an encrypted off-site export or PITR where the recovery target requires it. Back up Storage objects separately and rehearse a restore. Before production, verify denied as well as allowed role cases, AAL1 rejection, invited-account onboarding, deactivation, recovery, sync conflicts, and secret separation. Review Supabase RLS and deployment settings.
+The automation is prepared but inactive until the owner creates an AWS account, enables root MFA, creates the GitHub OIDC provider and database secret, deploys the CloudFormation stack, applies both new SQL migrations, configures GitHub variables, and runs the workflow. Follow `aws-backup/README.md`. The S3 archive is a logical export, not a complete Supabase point-in-time image. Supabase-managed Auth/Storage schemas and Storage object files need separate backup procedures. Confirm the recovery plan and test with a disposable staging project before relying on the archive. A full database disaster restore can roll back or replace business records; never use it as a configuration-only rollback.
+
+### Release and review plan
+
+1. Apply migrations in order: `202610110001_login_roles.sql`, `202610120001_self_signup.sql`, `202610160001_backup_audit.sql`, `202610160002_workspace_configuration.sql`.
+2. Configure Supabase email confirmation, Google OAuth, TOTP MFA, redirect allow-lists, and the production email provider. Create and enroll the initial account, then promote it to administrator through the controlled bootstrap SQL.
+3. Deploy the `manage-users` Edge Function with protected secrets and the production origin allow-list. Configure Vercel with only the Supabase URL and publishable key, set the project root to `web`, and deploy the web/PWA client.
+4. Build the Expo native client with SQLCipher enabled. Verify Google redirect, TOTP enrollment/challenge, encrypted offline queue, and role-specific screens on Android and iOS development builds.
+5. Create the AWS backup resources and GitHub variables. Run the first backup, inspect `backup_runs`, verify checksum files, and rehearse recovery in staging. Export Storage objects separately. Document backup retention and recovery owner.
+6. Confirm additional role names and permission rules with the lecturer. Review allowed and denied role actions, AAL1 rejection, onboarding, deactivation, password/factor recovery, offline sync, secrets separation, and config-only restore. Verify config restore does not alter `inputs`; conduct a separate full database recovery exercise in staging.
 
 ### References
-[Supabase password security](https://supabase.com/docs/guides/auth/password-security) — bcrypt and per-password salt.
-[Supabase MFA](https://supabase.com/docs/guides/auth/auth-mfa) — TOTP and AAL2 enforcement.
-[Supabase role-based access control](https://supabase.com/docs/guides/api/custom-claims-and-role-based-access-control-rbac) — role claims and RLS.
-[Supabase with Expo social auth](https://supabase.com/docs/guides/auth/quickstarts/with-expo-react-native-social-auth) — Google OAuth on mobile.
-[Expo SQLite / SQLCipher](https://docs.expo.dev/versions/latest/sdk/sqlite/) — encrypted on-device data.
-[Vercel environment variables](https://vercel.com/docs/environment-variables) — deployment configuration.
-[Supabase database backups](https://supabase.com/docs/guides/platform/backups) — plan-dependent daily backups, PITR, and restore guidance.
 
-**Implementation proposal — authorize the initial administrator, Google OAuth application, Supabase project, and Vercel deployment owner before production release.**
+[Supabase password security](https://supabase.com/docs/guides/auth/password-security) - bcrypt and per-password salts.
+[Supabase MFA](https://supabase.com/docs/guides/auth/auth-mfa) - TOTP and AAL2.
+[Supabase database backup and restore](https://supabase.com/docs/guides/platform/migrating-within-supabase/backup-restore) - logical dump and restore.
+[AWS root account security](https://docs.aws.amazon.com/IAM/latest/UserGuide/root-user-best-practices.html) - MFA and restricted root use.
+[Amazon S3 access control](https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-management.html) - Block Public Access, versioning, and encryption.
+[AWS Secrets Manager with Lambda](https://docs.aws.amazon.com/secretsmanager/latest/userguide/retrieving-secrets_lambda.html) - secret access through IAM.
+
+**Implementation status:** Web/mobile clients and database policies are in the repository. AWS account creation, migrations 3-4, AWS resource deployment, and the first restore rehearsal still require owner setup.

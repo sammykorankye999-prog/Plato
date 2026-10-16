@@ -1,0 +1,128 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Private encrypted S3 backup bucket and scoped GitHub Actions OIDC role for Secure Workspace.
+Parameters:
+  GitHubOidcProviderArn:
+    Type: String
+    Description: IAM OIDC provider ARN for token.actions.githubusercontent.com in this AWS account.
+  GitHubRepository:
+    Type: String
+    Default: sammykorankye999-prog/Secure-Workspace
+    Description: GitHub owner/repository allowed to assume the backup role.
+  SupabaseDatabaseSecretArn:
+    Type: String
+    Description: Secrets Manager ARN; SecretString JSON must contain database_url.
+Resources:
+  BackupKey:
+    Type: AWS::KMS::Key
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Description: Encryption key for Secure Workspace database backup objects.
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AccountKeyAdministration
+            Effect: Allow
+            Principal:
+              AWS: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:root
+            Action: 'kms:*'
+            Resource: '*'
+  BackupBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID: !GetAtt BackupKey.Arn
+            BucketKeyEnabled: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireBackupObjectsAfter90Days
+            Status: Enabled
+            ExpirationInDays: 90
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 90
+  BackupBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref BackupBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !GetAtt BackupBucket.Arn
+              - !Sub '${BackupBucket.Arn}/*'
+            Condition:
+              Bool:
+                aws:SecureTransport: false
+  BackupActionsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: GitHub workflow role restricted to this repository and backup bucket.
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Ref GitHubOidcProviderArn
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+              StringLike:
+                token.actions.githubusercontent.com:sub: !Sub 'repo:${GitHubRepository}:ref:refs/heads/main'
+      Policies:
+        - PolicyName: WriteEncryptedBackupsAndReadDatabaseSecret
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: WriteBackups
+                Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:AbortMultipartUpload
+                  - s3:ListMultipartUploadParts
+                Resource: !Sub '${BackupBucket.Arn}/*'
+              - Sid: ListOnlyMultipartUploads
+                Effect: Allow
+                Action: s3:ListBucketMultipartUploads
+                Resource: !GetAtt BackupBucket.Arn
+                Condition:
+                  StringLike:
+                    s3:prefix: daily/*
+              - Sid: ReadOnlyThisDatabaseSecret
+                Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref SupabaseDatabaseSecretArn
+              - Sid: EncryptBackupObjects
+                Effect: Allow
+                Action:
+                  - kms:Encrypt
+                  - kms:GenerateDataKey
+                  - kms:DescribeKey
+                Resource: !GetAtt BackupKey.Arn
+Outputs:
+  BackupBucketName:
+    Value: !Ref BackupBucket
+  BackupBucketArn:
+    Value: !GetAtt BackupBucket.Arn
+  BackupKmsKeyArn:
+    Value: !GetAtt BackupKey.Arn
+  GitHubActionsRoleArn:
+    Value: !GetAtt BackupActionsRole.Arn

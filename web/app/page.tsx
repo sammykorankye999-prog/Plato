@@ -7,6 +7,11 @@ import { supabase } from '@/lib/supabase';
 type Stage = 'loading' | 'signin' | 'enroll' | 'challenge' | 'workspace' | 'forgot-password' | 'reset-password';
 type AppRole = 'inputer' | 'manager' | 'admin' | 'administrator';
 type InputRow = { id: string; owner_id: string; content: string; status: string; created_at: string };
+type UserRoleRow = { user_id: string; email: string; role: AppRole; active: boolean; created_at: string };
+type AuditRow = { id: number; event: string; actor_id: string | null; target_user_id: string | null; created_at: string; details: Record<string, string> };
+type ConfigRow = { maintenance_mode: boolean; offline_entry_enabled: boolean; max_record_length: number; updated_at: string };
+type ConfigVersion = { id: number; maintenance_mode: boolean; offline_entry_enabled: boolean; max_record_length: number; reason: string; created_at: string; changed_by: string | null };
+type BackupRun = { id: number; provider: string; backup_kind: string; status: string; artifact_key: string | null; checksum_sha256: string | null; started_at: string; completed_at: string | null };
 
 export default function Home() {
   const [stage, setStage] = useState<Stage>('loading');
@@ -20,6 +25,13 @@ export default function Home() {
   const [qrCode, setQrCode] = useState('');
   const [record, setRecord] = useState('');
   const [inputs, setInputs] = useState<InputRow[]>([]);
+  const [hasMoreInputs, setHasMoreInputs] = useState(false);
+  const [directory, setDirectory] = useState<UserRoleRow[]>([]);
+  const [auditEvents, setAuditEvents] = useState<AuditRow[]>([]);
+  const [backupRuns, setBackupRuns] = useState<BackupRun[]>([]);
+  const [configurationAvailable, setConfigurationAvailable] = useState(false);
+  const [workspaceConfig, setWorkspaceConfig] = useState<ConfigRow>({ maintenance_mode: false, offline_entry_enabled: true, max_record_length: 4000, updated_at: '' });
+  const [configVersions, setConfigVersions] = useState<ConfigVersion[]>([]);
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [authView, setAuthView] = useState<'signin' | 'create'>('signin');
@@ -34,10 +46,40 @@ export default function Home() {
     if (roleError) throw roleError;
     if (!roleRow) { setRole(null); setStage('workspace'); setMessage('Your account has no assigned application role. Contact the administrator.'); return; }
     setRole(roleRow.role);
+    const { data: configData, error: configError } = await supabase.from('workspace_configuration')
+      .select('maintenance_mode,offline_entry_enabled,max_record_length,updated_at').eq('singleton', true).single();
+    if (configError?.code === 'PGRST205') {
+      setConfigurationAvailable(false);
+      setWorkspaceConfig({ maintenance_mode: false, offline_entry_enabled: true, max_record_length: 4000, updated_at: '' });
+    } else if (configError) throw configError;
+    else { setConfigurationAvailable(true); setWorkspaceConfig(configData); }
     const { data: inputData, error: inputError } = await supabase.from('inputs')
-      .select('id,owner_id,content,status,created_at').order('created_at', { ascending: false }).limit(50);
+      .select('id,owner_id,content,status,created_at').order('created_at', { ascending: false }).order('id', { ascending: false }).range(0, 49);
     if (inputError) throw inputError;
     setInputs(inputData ?? []);
+    setHasMoreInputs((inputData?.length ?? 0) === 50);
+    if (['manager', 'admin', 'administrator'].includes(roleRow.role)) {
+      const { data, error } = await supabase.from('user_roles')
+        .select('user_id,email,role,active,created_at').order('created_at', { ascending: false });
+      if (error) throw error;
+      setDirectory(data ?? []);
+    } else setDirectory([]);
+    if (['admin', 'administrator'].includes(roleRow.role)) {
+      const { data, error } = await supabase.from('audit_events')
+        .select('id,event,actor_id,target_user_id,created_at,details').order('created_at', { ascending: false }).order('id', { ascending: false });
+      if (error) throw error;
+      setAuditEvents(data ?? []);
+      const { data: backups, error: backupError } = await supabase.from('backup_runs')
+        .select('id,provider,backup_kind,status,artifact_key,checksum_sha256,started_at,completed_at').order('started_at', { ascending: false });
+      if (backupError?.code === 'PGRST205') setBackupRuns([]);
+      else if (backupError) throw backupError;
+      else setBackupRuns(backups ?? []);
+      const { data: versions, error: versionsError } = await supabase.from('workspace_configuration_versions')
+        .select('id,maintenance_mode,offline_entry_enabled,max_record_length,reason,created_at,changed_by').order('id', { ascending: false });
+      if (versionsError?.code === 'PGRST205') setConfigVersions([]);
+      else if (versionsError) throw versionsError;
+      else setConfigVersions(versions ?? []);
+    } else { setAuditEvents([]); setBackupRuns([]); setConfigVersions([]); }
     setStage('workspace'); setMessage('');
   }, []);
 
@@ -187,9 +229,22 @@ export default function Home() {
 
   async function createInput(event: FormEvent) {
     event.preventDefault(); if (!session) return; setBusy(true); setMessage('');
+    if (workspaceConfig.maintenance_mode && role !== 'admin' && role !== 'administrator') { setMessage('Record entry is paused for maintenance.'); setBusy(false); return; }
+    if (record.trim().length > workspaceConfig.max_record_length) { setMessage(`Keep the record under ${workspaceConfig.max_record_length} characters.`); setBusy(false); return; }
     const { error } = await supabase.from('inputs').insert({ owner_id: session.user.id, content: record.trim() });
     if (error) setMessage(error.message);
     else { setRecord(''); await loadWorkspace(session); }
+    setBusy(false);
+  }
+
+  async function loadOlderInputs() {
+    if (!session || busy || !hasMoreInputs) return;
+    setBusy(true);
+    const from = inputs.length;
+    const { data, error } = await supabase.from('inputs').select('id,owner_id,content,status,created_at')
+      .order('created_at', { ascending: false }).order('id', { ascending: false }).range(from, from + 49);
+    if (error) setMessage(error.message);
+    else { setInputs(current => [...current, ...(data ?? [])]); setHasMoreInputs((data?.length ?? 0) === 50); }
     setBusy(false);
   }
 
@@ -202,6 +257,27 @@ export default function Home() {
       else setMessage('Role updated.');
       await loadWorkspace(session);
     } else if (!error) setMessage('Invitation sent.');
+    setBusy(false);
+  }
+
+  async function saveWorkspaceConfiguration(values: Pick<ConfigRow, 'maintenance_mode'|'offline_entry_enabled'|'max_record_length'>, reason: string) {
+    setBusy(true); setMessage('');
+    const { error } = await supabase.rpc('change_workspace_configuration', {
+      p_maintenance_mode: values.maintenance_mode,
+      p_offline_entry_enabled: values.offline_entry_enabled,
+      p_max_record_length: values.max_record_length,
+      p_reason: reason,
+    });
+    if (error) setMessage(error.message);
+    else if (session) { setMessage('Workspace configuration saved as a new version.'); await loadWorkspace(session); }
+    setBusy(false);
+  }
+
+  async function restoreWorkspaceConfiguration(versionId: number, reason: string) {
+    setBusy(true); setMessage('');
+    const { error } = await supabase.rpc('restore_workspace_configuration', { p_version_id: versionId, p_reason: reason });
+    if (error) setMessage(error.message);
+    else if (session) { setMessage('Configuration restored. User records were left unchanged.'); await loadWorkspace(session); }
     setBusy(false);
   }
 
@@ -218,16 +294,45 @@ export default function Home() {
     {stage === 'challenge' && <section className="hero"><p className="eyebrow">TWO-FACTOR CHECK</p><h1>Enter your code.</h1><p className="muted">Open your authenticator app and enter the current six-digit code.</p><form className="card" onSubmit={verifyFactor}><label>Authenticator code<input inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength={6} required value={code} onChange={e=>setCode(e.target.value)}/></label><button disabled={busy}>Verify <span>→</span></button></form></section>}
     {stage === 'workspace' && <>
       <section className="card password-card"><h2>Change password</h2><p className="muted">Confirm your current password and choose a new one.</p><form onSubmit={changePassword}><label>Current password<input type="password" autoComplete="current-password" required value={currentPassword} onChange={e=>setCurrentPassword(e.target.value)}/></label><label>New password<input type="password" autoComplete="new-password" minLength={12} required value={newPassword} onChange={e=>setNewPassword(e.target.value)}/></label><label>Confirm new password<input type="password" autoComplete="new-password" minLength={12} required value={confirmPassword} onChange={e=>setConfirmPassword(e.target.value)}/></label><button disabled={busy}>{busy?'Updating password…':'Change password'}</button></form></section>
-      <section className="hero"><p className="eyebrow">SIGNED IN · {role?.toUpperCase() ?? 'ROLE PENDING'}</p><h1>Welcome.</h1><p className="muted">{session?.user.email} · Access requires password or Google plus verified TOTP.</p><button className="secondary" onClick={()=>supabase.auth.signOut()}>Sign out</button></section>
-      {role && <section className="card"><h2>New input</h2><form onSubmit={createInput}><label>Record details<textarea maxLength={4000} rows={3} required value={record} onChange={e=>setRecord(e.target.value)}/></label><button disabled={busy}>Save draft</button></form></section>}
-      <section className="card"><h2>Recent records</h2>{inputs.length ? inputs.map(row=><article className="record" key={row.id}><p>{row.content}</p><small>{row.status} · {new Date(row.created_at).toLocaleString()}</small></article>) : <p className="muted">No records available.</p>}</section>
-      {role && ['manager','admin','administrator'].includes(role) && <UserManagement role={role} ownUserId={session?.user.id ?? ''} busy={busy} onAdd={email=>manageUser('add_inputer',{email})} onDeactivate={userId=>manageUser('deactivate_inputer',{userId})} onAssign={(userId,newRole)=>manageUser('assign_role',{userId,role:newRole})}/>}
+      <section className="hero"><p className="eyebrow">{dashboardTitle(role)}</p><h1>{dashboardHeading(role)}.</h1><p className="muted">{session?.user.email} · Access requires password or Google plus verified TOTP.</p><button className="secondary" onClick={()=>supabase.auth.signOut()}>Sign out</button></section>
+      {role && role !== 'inputer' && <section className="stats-grid"><article className="stat-card"><span>Visible records</span><strong>{inputs.length}</strong></article><article className="stat-card"><span>Accounts in directory</span><strong>{directory.length}</strong></article>{['admin','administrator'].includes(role) && <article className="stat-card"><span>Recent security events</span><strong>{auditEvents.length}</strong></article>}</section>}
+      {workspaceConfig.maintenance_mode && role !== 'admin' && role !== 'administrator' && <div className="maintenance-banner">Record entry is temporarily paused for maintenance. Your account and existing records remain available.</div>}
+      {role && <section className="card"><h2>{role === 'inputer' ? 'Create a record' : 'Team record entry'}</h2><form onSubmit={createInput}><label>Record details<textarea maxLength={workspaceConfig.max_record_length} rows={3} required value={record} onChange={e=>setRecord(e.target.value)}/></label><small>{record.length} / {workspaceConfig.max_record_length} characters</small><button disabled={busy || (workspaceConfig.maintenance_mode && role !== 'admin' && role !== 'administrator')}>Save draft</button></form></section>}
+      <section className="card"><h2>{role === 'inputer' ? 'My records' : 'Team records'}</h2>{inputs.length ? inputs.map(row=><article className="record" key={row.id}><p>{row.content}</p><small>{row.status} · {new Date(row.created_at).toLocaleString()}{role !== 'inputer' ? ` · owner ${row.owner_id}` : ''}</small></article>) : <p className="muted">No records available.</p>}{hasMoreInputs && <button className="secondary" disabled={busy} onClick={loadOlderInputs}>Load older records</button>}</section>
+      {role && ['manager','admin','administrator'].includes(role) && <UserManagement role={role} ownUserId={session?.user.id ?? ''} users={directory} busy={busy} onAdd={email=>manageUser('add_inputer',{email})} onDeactivate={userId=>manageUser('deactivate_inputer',{userId})} onAssign={(userId,newRole)=>manageUser('assign_role',{userId,role:newRole})}/>}
+      {role && ['admin','administrator'].includes(role) && <section className="card"><h2>Security and role audit</h2><p className="muted">Recent invitations, deactivations, and role changes.</p>{auditEvents.length ? auditEvents.map(item=><article className="record" key={item.id}><p>{item.event.replaceAll('_',' ')}</p><small>{new Date(item.created_at).toLocaleString()} · actor {item.actor_id ?? 'system'} · target {item.target_user_id ?? '—'}{item.details?.from ? ` · ${item.details.from} → ${item.details.to}` : ''}</small></article>) : <p className="muted">No audit events available.</p>}</section>}
+      {role && ['admin','administrator'].includes(role) && <section className="card"><h2>Backup history</h2>{backupRuns.length ? backupRuns.map(run=><article className="record" key={run.id}><p>{run.provider} · {run.backup_kind} · {run.status}</p><small>{new Date(run.started_at).toLocaleString()} · {run.artifact_key ?? 'No artifact path yet'}{run.checksum_sha256 ? ` · SHA-256 ${run.checksum_sha256}` : ''}</small></article>) : <p className="muted">No backup runs are recorded yet.</p>}</section>}
+      {role === 'administrator' && !configurationAvailable && <section className="card"><h2>Workspace configuration</h2><p className="muted">Apply `202610160002_workspace_configuration.sql` in Supabase SQL Editor to enable versioned settings and configuration-only restore.</p></section>}
+      {role && ['admin','administrator'].includes(role) && configurationAvailable && <WorkspaceConfiguration config={workspaceConfig} versions={configVersions} canManage={role === 'administrator'} busy={busy} onSave={saveWorkspaceConfiguration} onRestore={restoreWorkspaceConfiguration}/>}
     </>}
     <footer>Protected by Supabase Auth, MFA, and database row policies.</footer>
   </main>;
 }
 
-function UserManagement({ role, ownUserId, busy, onAdd }: { role: AppRole; ownUserId:string; busy: boolean; onAdd: (email:string)=>void; onDeactivate:(id:string)=>void; onAssign:(id:string,role:AppRole)=>void }) {
+function WorkspaceConfiguration({ config, versions, canManage, busy, onSave, onRestore }: { config: ConfigRow; versions: ConfigVersion[]; canManage: boolean; busy: boolean; onSave: (config: Pick<ConfigRow, 'maintenance_mode'|'offline_entry_enabled'|'max_record_length'>, reason: string) => void; onRestore: (id: number, reason: string) => void }) {
+  const [maintenanceMode, setMaintenanceMode] = useState(config.maintenance_mode);
+  const [offlineEnabled, setOfflineEnabled] = useState(config.offline_entry_enabled);
+  const [maxLength, setMaxLength] = useState(String(config.max_record_length));
+  const [reason, setReason] = useState('');
+  useEffect(() => { setMaintenanceMode(config.maintenance_mode); setOfflineEnabled(config.offline_entry_enabled); setMaxLength(String(config.max_record_length)); }, [config]);
+  return <section className="card"><h2>Workspace configuration</h2><p className="muted">Saving or restoring settings does not alter user records. {canManage?'Only the administrator can change or restore settings.':'Read-only configuration view.'}</p><article className="record"><p>{config.maintenance_mode?'Maintenance mode is on':'Normal operation'} · encrypted offline queue {config.offline_entry_enabled?'enabled':'disabled'} · max record length {config.max_record_length}</p><small>Updated {config.updated_at ? new Date(config.updated_at).toLocaleString() : 'with defaults'}</small></article>{canManage&&<form onSubmit={event=>{event.preventDefault();onSave({maintenance_mode:maintenanceMode,offline_entry_enabled:offlineEnabled,max_record_length:Number(maxLength)},reason);setReason('')}}><label className="check-row"><input type="checkbox" checked={maintenanceMode} onChange={event=>setMaintenanceMode(event.target.checked)}/>Pause new record entry</label><label className="check-row"><input type="checkbox" checked={offlineEnabled} onChange={event=>setOfflineEnabled(event.target.checked)}/>Allow encrypted offline queue</label><label>Maximum record length<input type="number" min={100} max={4000} required value={maxLength} onChange={event=>setMaxLength(event.target.value)}/></label><label>Reason for this configuration change<input minLength={3} maxLength={500} required value={reason} onChange={event=>setReason(event.target.value)}/></label><button disabled={busy}>Save configuration version</button></form>}<h3>Previous configuration versions</h3>{versions.length ? versions.map(version=><article className="record" key={version.id}><p>Version {version.id} · {version.maintenance_mode?'maintenance on':'normal operation'} · offline {version.offline_entry_enabled?'on':'off'} · max {version.max_record_length}</p><small>{new Date(version.created_at).toLocaleString()} · {version.reason}</small>{canManage&&<button className="secondary restore-button" disabled={busy} onClick={()=>{const restoreReason=window.prompt(`Why restore configuration version ${version.id}?`);if(restoreReason?.trim())onRestore(version.id,restoreReason.trim())}}>Restore configuration only</button>}</article>) : <p className="muted">No configuration versions yet.</p>}</section>;
+}
+
+function dashboardTitle(role: AppRole | null) {
+  if (role === 'administrator') return 'SYSTEM ADMINISTRATOR DASHBOARD';
+  if (role === 'admin') return 'ADMIN OPERATIONS DASHBOARD';
+  if (role === 'manager') return 'MANAGER TEAM DASHBOARD';
+  return 'INPUTER PERSONAL DASHBOARD';
+}
+
+function dashboardHeading(role: AppRole | null) {
+  if (role === 'administrator') return 'System overview';
+  if (role === 'admin') return 'Operations overview';
+  if (role === 'manager') return 'Team overview';
+  return 'My workspace';
+}
+
+function UserManagement({ role, ownUserId, users, busy, onAdd, onDeactivate, onAssign }: { role: AppRole; ownUserId:string; users:UserRoleRow[]; busy: boolean; onAdd: (email:string)=>void; onDeactivate:(id:string)=>void; onAssign:(id:string,role:AppRole)=>void }) {
   const [email, setEmail] = useState('');
-  return <section className="card"><h2>User accounts</h2>{['manager','administrator'].includes(role) && <form onSubmit={e=>{e.preventDefault(); onAdd(email); setEmail('')}}><label>Invite inputer by email<input type="email" required value={email} onChange={e=>setEmail(e.target.value)}/></label><button disabled={busy}>Send invitation</button></form>}<p className="muted">For role changes and account deactivation, use a protected administrator workflow. The account directory is intentionally not exposed to this client.</p></section>;
+  return <section className="card"><h2>{role === 'manager' ? 'Inputer onboarding' : 'User administration'}</h2>{role === 'manager' && <form onSubmit={e=>{e.preventDefault(); onAdd(email); setEmail('')}}><label>Invite inputer by email<input type="email" required value={email} onChange={e=>setEmail(e.target.value)}/></label><button disabled={busy}>Send invitation</button></form>}{role !== 'manager' && <p className="muted">Admin roles can review the whole team. Admin may deactivate inputer accounts; only the administrator may assign roles.</p>}{users.length ? users.map(user=><article className="userrow" key={user.user_id}><span>{user.email}<small>{user.role} · {user.active ? 'active' : 'inactive'}{user.user_id === ownUserId ? ' · you' : ''}</small></span><span className="actions">{role === 'admin' && user.role === 'inputer' && user.active && user.user_id !== ownUserId && <button className="danger" disabled={busy} onClick={()=>onDeactivate(user.user_id)}>Deactivate</button>}{role === 'administrator' && user.user_id !== ownUserId && <><select aria-label={`Role for ${user.email}`} value={user.role} disabled={!user.active || busy} onChange={e=>onAssign(user.user_id,e.target.value as AppRole)}><option value="inputer">Inputer</option><option value="manager">Manager</option><option value="admin">Admin</option><option value="administrator">Administrator</option></select><button className="danger" disabled={busy || !user.active || user.role !== 'inputer'} onClick={()=>onDeactivate(user.user_id)}>Deactivate</button></>}</span></article>) : <p className="muted">No directory entries available.</p>}</section>;
 }
