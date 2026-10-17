@@ -1,4 +1,4 @@
-# AWS off-site backup setup
+# Plato AWS off-site backup setup
 
 The stack and workflow are prepared but not deployed. The AWS account owner must complete these steps in their own account.
 

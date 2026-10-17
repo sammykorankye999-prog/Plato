@@ -1,6 +1,6 @@
 # Create an account, Google sign-in, and authenticator setup
 
-New accounts may register with email and password or continue with Google. The database automatically gives each new account the basic `inputer` role. The role cannot be selected during registration. An administrator can grant `manager`, `admin`, or `administrator` access later.
+New accounts may register with email and password or continue with Google. The database automatically gives each new account the basic `inputer` (learner) role. The role cannot be selected during registration. An administrator can grant `manager`, `admin`, or `administrator` access later.
 
 ## 1. Enable account registration in Supabase
 

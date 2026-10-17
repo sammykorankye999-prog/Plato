@@ -1,19 +1,19 @@
-# Secure Workspace
+# Plato
 
-Secure Workspace is a role-based records app. The cloud project uses Next.js/Vercel, Supabase Auth/Postgres, and Expo/React Native. The root `server.mjs` and `start.mjs` are an older local SQLite prototype and do not connect to Supabase.
+Plato is a role-based Learning Management System. The cloud project uses Next.js/Vercel, Supabase Auth/Postgres, and Expo/React Native. The root `server.mjs` and `start.mjs` are an older local SQLite prototype and do not connect to Supabase.
 
 The implementation paper is in [Markdown](Login_Security_Implementation_Paper.md) and [print-formatted HTML](Login_Security_Implementation_Paper.html). Regenerate the HTML after editing with `node render-paper.mjs`. OAuth, email confirmation, and TOTP enrollment steps are in [GETTING_STARTED_OAUTH_MFA.md](GETTING_STARTED_OAUTH_MFA.md).
 
 ## What is implemented
 
-- Web app in `web/`, deployed through Vercel with project root `web/`. It works in desktop browsers and has an installable PWA shell. Its service worker is network-only and does not cache authenticated screens or records.
-- Mobile app in `mobile/`, built with Expo and React Native. It uses Google OAuth, TOTP MFA, and an encrypted SQLCipher queue for unsent records.
+- Web app in `web/`, deployed through Vercel with project root `web/`. It works in desktop browsers and has an installable PWA shell. Its service worker is network-only and does not cache authenticated screens or course content.
+- Mobile app in `mobile/`, built with Expo and React Native. It uses Google OAuth, TOTP MFA, and an encrypted SQLCipher queue for unsent course content.
 - Supabase Auth handles email/password and Google identity, sessions, password recovery, and TOTP. SQL RLS requires an AAL2 session before protected data access.
-- New accounts receive the least-privileged `inputer` role. Users cannot grant themselves roles.
-- Four roles exist: `inputer`, `manager`, `admin`, and `administrator`. Inputers manage their own records. Managers and admins can invite inputers. Admins can review team records, the user directory, audit and backup history, deactivate inputers, and change or restore versioned settings. Administrators can also assign roles and manage the workspace.
-- Web and mobile have role-specific dashboard views. Team records can be paged. Database policies and the `manage-users` Edge Function enforce privileges; hiding a UI control is not the security boundary.
+- New accounts receive the least-privileged `inputer` (learner) role. Users cannot grant themselves roles.
+- Four roles exist: `inputer`, `manager`, `admin`, and `administrator`. Learners manage their own lessons. Managers and admins can invite learners. Admins can review team content, the user directory, audit and backup history, deactivate learners, and change or restore versioned settings. Administrators can also assign roles and manage the Plato workspace.
+- Web and mobile have role-specific dashboard views. Team content can be paged. Database policies and the `manage-users` Edge Function enforce privileges; hiding a UI control is not the security boundary.
 - `audit_events` records invitations, deactivations, role changes, and configuration changes/restores. The new `backup_runs` table records backup status and artifact metadata.
-- Workspace configuration history covers maintenance mode, offline queue availability, and maximum record length. An admin can restore a version without changing `inputs`. This does not restore Vercel environment variables or Supabase provider configuration.
+- Workspace configuration history covers maintenance mode, offline queue availability, and maximum record length. An admin can restore a version without changing course content. This does not restore Vercel environment variables or Supabase provider configuration.
 
 ### Password salt and pepper
 
@@ -41,6 +41,7 @@ In Supabase SQL Editor, apply the SQL files in this order:
 3. `supabase/migrations/202610160001_backup_audit.sql`
 4. `supabase/migrations/202610160002_workspace_configuration.sql`
 5. `supabase/migrations/202610170001_admin_workspace_settings.sql`
+6. `supabase/migrations/202610180001_plato_seed_data.sql`
 
 Enable email signup, email confirmation, and TOTP MFA in Supabase Auth. Create your first user, confirm its email, and enroll an authenticator. In Authentication > Users, copy the user's UUID, then promote that account in SQL Editor:
 
@@ -52,9 +53,9 @@ where user_id = 'AUTH-USER-UUID-HERE';
 
 Replace the placeholder with the exact UUID. Do not give browser/mobile clients write access to `user_roles`.
 
-### Load a four-role demonstration dataset
+### Load the four-user Plato demonstration dataset
 
-Use a disposable Supabase development project only. Create and email-confirm four test Auth accounts. Edit the four example email values at the top of `supabase/seed-demo.sql` to match those accounts, then run it in SQL Editor. It assigns the four roles and creates five example `public.inputs` rows. It does not create or store passwords. It skips matching records if you run it again. Do not run the demo seed in production.
+Use a disposable Supabase development project only. Create and email-confirm four test Auth accounts with these emails: `inputer@example.com`, `manager@example.com`, `admin@example.com`, `administrator@example.com`. Then run `supabase/migrations/202610180001_plato_seed_data.sql` in SQL Editor. It assigns the four roles and creates five example `public.inputs` (course content) rows. It skips matching records if you run it again. It does not create or store passwords. Do not run the demo seed in production.
 
 Configure the Google provider in Google Cloud and Supabase. Allow the deployed Vercel callback/redirect and `secureworkspace://auth/callback` in Supabase Auth URL configuration. Deploy the privileged Edge Function:
 

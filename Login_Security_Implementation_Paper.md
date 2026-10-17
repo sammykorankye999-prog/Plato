@@ -1,9 +1,9 @@
-# Secure Workspace: Authentication, Authorization, and Recovery
+# Plato LMS: Authentication, Authorization, and Recovery
 ## Implementation paper | 16 October 2026
 
 ### Purpose and platform
 
-This system identifies each person with a unique Supabase Auth account, authenticates the account with a password or Google sign-in followed by TOTP two-factor authentication, and authorizes actions by role. The web client is Next.js and Vercel, usable in desktop browsers and installable as a network-only PWA. The mobile client is Expo/React Native. Supabase Auth manages identity and sessions; Supabase Postgres is the authoritative records database. A local development server supports workstation development. Production web traffic uses HTTPS.
+This system identifies each person with a unique Supabase Auth account, authenticates the account with a password or Google sign-in followed by TOTP two-factor authentication, and authorizes actions by role. The web client is Next.js and Vercel, usable in desktop browsers and installable as a network-only PWA. The mobile client is Expo/React Native. Supabase Auth manages identity and sessions; Supabase Postgres is the authoritative course-content database. A local development server supports workstation development. Production web traffic uses HTTPS.
 
 Browser and mobile apps use only the Supabase project URL and publishable key. Postgres Row Level Security (RLS) checks the signed-in identity, application role, active status, and MFA assurance level for protected operations. A Supabase Edge Function performs privileged invitations, deactivation, and role assignment after validating the caller. Keep its service-role credential server-side. Never ship database passwords, service-role keys, AWS credentials, or peppers in client bundles or Git.
 
@@ -21,9 +21,9 @@ The protected `user_roles` table currently defines four roles. RLS defaults to d
 
 | Role | Permissions |
 |---|---|
-| Inputer | Create and read own records; edit own drafts. |
-| Manager | Inputer permissions; invite inputers by verified email. No deactivation or elevated role assignment. |
-| Admin | Review team records, user directory, audit and backup history; invite and deactivate inputers; change and restore versioned workspace settings. Cannot deactivate managers or administrators. |
+| Learner (inputer) | Create and read own lessons; edit own drafts. |
+| Manager | Learner permissions; invite learners by verified email. No deactivation or elevated role assignment. |
+| Admin | Review team content, user directory, audit and backup history; invite and deactivate learners; change and restore versioned workspace settings. Cannot deactivate managers or administrators. |
 | Administrator | Admin permissions; assign roles and retain highest-level oversight. Require AAL2 for every privileged action. |
 
 Web and mobile show separate dashboard views for the four roles. Admins can page through team records. User directory, configuration history, backup history, and security events are visible according to database policies. Additional roles must be named and assigned explicit permissions before adding them to the database enum or functions. Role checks in the interface support usability; RLS and trusted functions provide enforcement. Deactivation is preferred to permanent deletion so records and audit references remain intact. Record actor, target, action, time, and outcome without passwords, TOTP codes, or session tokens.
