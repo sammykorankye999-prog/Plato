@@ -38,7 +38,7 @@ Deno.serve(async (request) => {
 
     const body = await request.json();
     if (body.action === 'add_inputer') {
-      if (callerRole.role !== 'manager') return response({ error: 'Only managers can invite inputers' }, 403);
+      if (!['manager', 'admin', 'administrator'].includes(callerRole.role)) return response({ error: 'Manager or admin role required to invite inputers' }, 403);
       const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
       if (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return response({ error: 'Enter a valid email address' }, 400);
       const { data, error } = await admin.auth.admin.inviteUserByEmail(email, {
