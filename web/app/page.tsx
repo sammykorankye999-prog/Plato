@@ -99,6 +99,12 @@ export default function Home() {
       return;
     }
 
+    const unverifiedTotp = factors.totp.filter(item => item.status !== 'verified');
+    for (const factor of unverifiedTotp) {
+      const { error: delError } = await supabase.auth.mfa.unenroll({ factorId: factor.id });
+      if (delError) throw delError;
+    }
+
     const { data: enrollment, error } = await supabase.auth.mfa.enroll({ factorType: 'totp', friendlyName: 'Authenticator' });
     if (error) throw error;
     setFactorId(enrollment.id); setQrCode(enrollment.totp.qr_code); setStage('enroll');

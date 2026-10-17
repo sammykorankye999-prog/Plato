@@ -54,6 +54,8 @@ export default function Home() {
     const {data:factors,error:factorError}=await supabase.auth.mfa.listFactors(); if(factorError) throw factorError;
     const verified=factors.totp.find(f=>f.status==='verified');
     if(verified){const {data,error}=await supabase.auth.mfa.challenge({factorId:verified.id});if(error)throw error;setFactorId(verified.id);setChallengeId(data.id);setStage('challenge');return;}
+    const unverifiedTotp=factors.totp.filter(f=>f.status!=='verified');
+    for(const factor of unverifiedTotp){    const {error:delError}=await supabase.auth.mfa.unenroll({factorId:factor.id});if(delError)throw delError;}
     const {data,error}=await supabase.auth.mfa.enroll({factorType:'totp',friendlyName:'Authenticator'});if(error)throw error;
     setFactorId(data.id);setQrCode(data.totp.qr_code);setStage('enroll');
   },[loadData]);
