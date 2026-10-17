@@ -81,6 +81,27 @@ Put the Supabase project URL and publishable key in `web/.env.local`. Open `http
 
 For Vercel, import the GitHub repository and set **Root Directory** to `web`. Set `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` for Preview and Production. Add the deployed Vercel domain to Supabase Auth redirects and the Edge Function origin allow-list. These two `NEXT_PUBLIC_` values are publishable; never use the prefix for a secret.
 
+### Recover a lost authenticator
+
+Changing a password does not replace the MFA factor. A normal password reset must not let an email-only recovery session bypass MFA. If the authenticator is lost, the Supabase project owner must remove the account's old TOTP factor from a trusted local machine. The next sign-in then prompts the user to enroll a new QR code.
+
+1. In Supabase **Authentication → Users**, copy the account UUID. In **Project Settings → API Keys**, copy the project **secret** key (legacy projects may call it the service-role key). Never paste this key into the browser, Vercel public environment variables, or chat.
+2. In a PowerShell terminal, go to `web` and set the secret and account identity for this one command session:
+
+```powershell
+cd 'C:\Users\APC\Documents\LOG IN PROJECT\web'
+$secureSecret = Read-Host 'Paste the Supabase project secret key' -AsSecureString
+$secretPointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureSecret)
+try { $env:SUPABASE_SECRET_KEY = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($secretPointer) }
+finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($secretPointer); Remove-Variable secureSecret }
+$env:MFA_RESET_USER_ID = 'AUTH-USER-UUID-HERE'
+$env:MFA_RESET_EMAIL = 'sammykorankye999@gmail.com'
+npm.cmd run mfa:reset
+Remove-Item Env:SUPABASE_SECRET_KEY, Env:MFA_RESET_USER_ID, Env:MFA_RESET_EMAIL
+```
+
+The utility verifies that the email and UUID match, shows how many TOTP factors it will remove, and requires the exact UUID confirmation. It removes only TOTP factors, preserves the Auth user and records, and signs out active sessions. Then request a fresh password reset email, set the password, and sign in to enroll the new QR. Scan it and verify a six-digit code before continuing. The script is in `web/scripts/reset-mfa-factor.mjs` and is not deployed.
+
 ## Run the Expo app
 
 Set `EXPO_PUBLIC_SUPABASE_URL` and `EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY` in `mobile/.env`, then run from PowerShell:

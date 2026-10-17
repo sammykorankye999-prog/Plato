@@ -1,7 +1,7 @@
 {
   "name": "login-web",
   "private": true,
-  "scripts": { "dev": "next dev", "build": "next build", "start": "next start" },
+  "scripts": { "dev": "next dev", "build": "next build", "start": "next start", "mfa:reset": "node --env-file=.env.local scripts/reset-mfa-factor.mjs" },
   "dependencies": {
     "@supabase/supabase-js": "^2.0.0",
     "next": "^16.0.0",

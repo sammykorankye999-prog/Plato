@@ -11,4 +11,5 @@ mobile/.expo/
 mobile/node_modules/
 mobile/.npm-cache/
 mobile/dist/
+mobile/android/
 supabase/.temp/
