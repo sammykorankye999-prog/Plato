@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Edit course' if editing else 'New course' }}{% endblock %}
+{% block content %}
+<section class="form-panel panel">
+<p class="eyebrow">INSTRUCTOR SPACE</p><h1>{{ 'Shape your course.' if editing else 'Create a course.' }}</h1><p class="muted">{{ 'Update the course details students see in the catalogue.' if editing else 'Give learners a clear idea of what they will discover.' }}</p>
+<form class="form-panel-form" method="post"
+      action="{{ url_for('edit_course', course_id=course.id) if editing else url_for('create_course') }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+  <label for="title">Course title</label><input id="title" name="title" required maxlength="200" autofocus
+         value="{{ form.title if form else (course.title if course else '') }}">
+
+  <label for="description">Course description</label>
+  <textarea id="description" name="description" rows="5" maxlength="2000" placeholder="What will students learn? What should they expect?">{{ form.description if form else (course.description if course and course.description else '') }}</textarea>
+
+  <div class="actions">
+    <button type="submit">{{ 'Save changes' if editing else 'Create course' }}</button>
+    <a href="{{ url_for('course_detail', course_id=course.id) if editing else url_for('dashboard') }}">Cancel</a>
+  </div>
+</form>
+</section>
+{% endblock %}

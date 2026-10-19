@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Edit lesson' if editing else 'Add lesson' }}{% endblock %}
+{% block content %}
+<section class="form-panel panel">
+<p class="eyebrow">{{ course.title }}</p><h1>{{ 'Refine this lesson.' if editing else 'Add a lesson.' }}</h1>
+<p class="muted">Write content in a clear, learner-friendly format. Line breaks are preserved.</p>
+
+<form class="form-panel-form" method="post"
+      action="{{ url_for('edit_lesson', lesson_id=lesson.id) if editing else url_for('add_lesson', course_id=course.id) }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+  <label for="title">Lesson title</label>
+  <input id="title" name="title" required maxlength="200" autofocus
+         value="{{ form.title if form else (lesson.title if lesson else '') }}">
+
+  <label for="content">Content</label>
+  <textarea id="content" name="content" rows="12" placeholder="Write the lesson content here…">{{ form.content if form else (lesson.content if lesson and lesson.content else '') }}</textarea>
+
+  <div class="actions">
+    <button type="submit">{{ 'Save changes' if editing else 'Add lesson' }}</button>
+    <a href="{{ url_for('course_detail', course_id=course.id) }}">Cancel</a>
+  </div>
+</form>
+</section>
+{% endblock %}

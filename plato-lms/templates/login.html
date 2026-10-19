@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Log in{% endblock %}
+{% block content %}
+<section class="auth-layout"><div class="auth-aside"><p class="eyebrow">WELCOME BACK</p><h1>Your next idea is <em>waiting.</em></h1><p>Pick up where you left off and keep moving toward what you want to know.</p><div class="auth-aside-note"><span aria-hidden="true">✳</span> A little progress, consistently, goes a long way.</div></div><div class="auth-content"><p class="eyebrow">MEMBER SIGN IN</p><h2>Good to see you again.</h2><p class="muted">Sign in to continue your learning journey.</p>
+<form class="auth-form" method="post">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <input type="hidden" name="next" value="{{ request.args.get('next', '') }}">
+
+  <label for="username">Username</label>
+  <input id="username" name="username" required autocomplete="username" autofocus>
+
+  <label for="password">Password</label>
+  <input id="password" name="password" type="password" required autocomplete="current-password">
+
+  <button class="btn full-width" type="submit">Sign in <span aria-hidden="true">→</span></button>
+</form><p class="auth-switch">New to Plato? <a href="{{ url_for('register') }}">Create an account</a></p></div></section>
+{% endblock %}

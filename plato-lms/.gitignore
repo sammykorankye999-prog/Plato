@@ -1,0 +1,14 @@
+﻿.env*
+!.env.example
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+instance/
+app.py.mod*
+app.py.orig
+mobile/.expo/
+mobile/node_modules/
+mobile/android/
+mobile/ios/
+mobile/dist/

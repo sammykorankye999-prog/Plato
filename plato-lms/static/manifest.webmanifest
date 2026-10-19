@@ -1,0 +1,19 @@
+{
+  "id": "/",
+  "name": "Plato Learning",
+  "short_name": "Plato",
+  "description": "A learning platform for courses, lessons and progress.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f7f6f2",
+  "theme_color": "#1e6554",
+  "icons": [
+    {
+      "src": "/static/plato-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

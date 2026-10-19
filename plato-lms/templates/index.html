@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Courses{% endblock %}
+{% block content %}
+<section class="catalogue-hero">
+  <div class="hero-copy"><p class="eyebrow">A BETTER WAY TO LEARN</p><h1>Knowledge for the<br><em>curious mind.</em></h1><p class="hero-description">Explore thoughtfully structured courses, learn at your own pace, and keep track of every step forward.</p><div class="hero-actions"><a class="btn" href="#course-list">Explore courses <span aria-hidden="true">↓</span></a>{% if not current_user.is_authenticated %}<a class="btn btn-secondary" href="{{ url_for('register') }}">Create your free account</a>{% endif %}</div></div>
+  <div class="hero-art" aria-hidden="true"><div class="orbit orbit-one"></div><div class="orbit orbit-two"></div><div class="hero-sun"></div><div class="hero-book">P<span>EST. MMXXIV</span></div><span class="hero-note note-one">LEARN</span><span class="hero-note note-two">GROW</span></div>
+</section>
+
+<section class="catalogue-section" id="course-list">
+  <div class="section-heading"><div><p class="eyebrow">THE CATALOGUE</p><h2>Find your next subject.</h2></div>
+  {% if courses %}<label class="search-wrap"><span aria-hidden="true">⌕</span><span class="sr-only">Search courses</span><input id="course-search" class="search" type="search" placeholder="Search courses" autocomplete="off"></label>{% endif %}</div>
+
+{% if courses %}
+  <div class="grid course-grid">
+    {% for course in courses %}
+      <article class="card course-card" data-title="{{ course.title }} {{ course.description or '' }}">
+        <div class="course-topline"><span class="course-icon" aria-hidden="true">{{ '%02d'|format(loop.index) }}</span><span class="course-type">COURSE {{ '%02d'|format(loop.index) }}</span><span class="course-arrow" aria-hidden="true">↗</span></div>
+        <h3><a href="{{ url_for('course_detail', course_id=course.id) }}">{{ course.title }}</a></h3>
+        {% if course.description %}<p class="course-description">{{ course.description|truncate(140) }}</p>{% else %}<p class="course-description">A guided course designed to help you build knowledge through clear, focused lessons.</p>{% endif %}
+        <div class="course-meta"><span>{% if course.instructor %}{{ course.instructor.username }}{% else %}Plato faculty{% endif %}</span><span class="meta-dot"></span>{% set n = course.lessons|length %}<span>{{ n }} {{ 'lesson' if n == 1 else 'lessons' }}</span></div>
+        <a class="course-link" href="{{ url_for('course_detail', course_id=course.id) }}">View course <span aria-hidden="true">→</span></a>
+      </article>
+    {% endfor %}
+  </div>
+{% else %}
+  <div class="empty-state"><span class="empty-icon" aria-hidden="true">✳</span><h3>Your learning journey starts here.</h3><p>No courses are available yet. Check back soon, or sign in as an instructor to create the first course.</p>
+    {% if current_user.is_authenticated and current_user.role == 'instructor' %}
+      <a class="btn" href="{{ url_for('create_course') }}">Create the first course <span aria-hidden="true">→</span></a>
+    {% endif %}
+  </div>
+{% endif %}
+</section>
+{% endblock %}

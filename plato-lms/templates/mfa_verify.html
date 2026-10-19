@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}Verify sign-in{% endblock %}
+{% block content %}
+<section class="auth-layout mfa-layout">
+  <div class="auth-aside"><p class="eyebrow">ACCOUNT SECURITY</p><h1>Confirm it’s <em>you.</em></h1><p>Your password was accepted. Complete the second step using the authenticator app linked to your account.</p></div>
+  <div class="auth-content"><p class="eyebrow">TWO-FACTOR CHECK</p><h2>Enter your code.</h2><p class="muted">Open your authenticator app and enter its current six-digit code.</p>
+    <form class="auth-form" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><label for="code">Authenticator code</label><input id="code" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]{6,8}" maxlength="8" required autofocus><button class="btn full-width" type="submit">Verify and continue</button></form>
+    <p class="auth-switch">Lost your authenticator? Contact an administrator to reset MFA. You will enroll a new authenticator at your next sign-in.</p>
+  </div>
+</section>
+{% endblock %}
+

@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Set up two-factor sign-in{% endblock %}
+{% block content %}
+<section class="auth-layout mfa-layout">
+  <div class="auth-aside"><p class="eyebrow">ACCOUNT SECURITY</p><h1>One more layer of <em>protection.</em></h1><p>Scan this code with an authenticator app such as Google Authenticator, Microsoft Authenticator, or 1Password. You will enter a fresh six-digit code at sign-in.</p><div class="auth-aside-note">Keep your authenticator available. If you lose it, an administrator can reset enrollment.</div></div>
+  <div class="auth-content"><p class="eyebrow">TWO-FACTOR SETUP</p><h2>Scan the QR code.</h2><p class="muted">Then enter the current code to confirm your authenticator is set up.</p>
+    <img class="mfa-qr" src="{{ qr_data }}" alt="Authenticator setup QR code">
+    <details class="mfa-manual"><summary>Can't scan? Enter setup key manually</summary><code>{{ secret }}</code></details>
+    <form class="auth-form" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><label for="code">Six-digit authenticator code</label><input id="code" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]{6,8}" maxlength="8" required autofocus><button class="btn full-width" type="submit">Verify and continue</button></form>
+  </div>
+</section>
+{% endblock %}
+

@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Register{% endblock %}
+{% block content %}
+<section class="auth-layout"><div class="auth-aside"><p class="eyebrow">YOUR NEXT CHAPTER</p><h1>Curiosity takes you <em>further.</em></h1><p>Join a community built around a simple idea: learning should be thoughtful, welcoming and within reach.</p><div class="auth-aside-note"><span aria-hidden="true">✳</span> Start with one lesson. Discover where it leads.</div></div><div class="auth-content"><p class="eyebrow">CREATE YOUR ACCOUNT</p><h2>Begin your learning journey.</h2><p class="muted">Set up your profile and find a course that inspires you.</p>
+{% if not registration_enabled %}<div class="notice-panel"><h3>Registration is currently closed.</h3><p>Please contact your workspace administrator for an account.</p><a href="{{ url_for('login') }}">Back to sign in</a></div>{% else %}<form class="auth-form" method="post">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+  <label for="username">Username</label>
+  <input id="username" name="username" required minlength="3" maxlength="80"
+         autocomplete="username" value="{{ form.username if form else '' }}">
+
+  <label for="email">Email</label>
+  <input id="email" name="email" type="email" required maxlength="120"
+         autocomplete="email" value="{{ form.email if form else '' }}">
+
+  <label for="password">Password</label>
+  <input id="password" name="password" type="password" required minlength="{{ password_min }}"
+         autocomplete="new-password">
+  <small class="muted">At least {{ password_min }} characters.</small>
+
+  <label for="role">I am joining as</label>
+  <select id="role" name="role">
+    <option value="student" {{ 'selected' if not form or form.role != 'instructor' }}>A student</option>
+    {% if instructor_signup_available %}<option value="instructor" {{ 'selected' if form and form.role == 'instructor' }}>An instructor</option>{% endif %}
+  </select>
+
+  {% if instructor_signup_available %}<label for="invite_code">Instructor invite code</label>
+  <input id="invite_code" name="invite_code" autocomplete="off" aria-describedby="invite-help">
+  <small id="invite-help" class="muted">Only needed if you are joining as an instructor.</small>{% endif %}
+
+  <div class="actions">
+    <button type="submit">Register</button>
+    <a href="{{ url_for('login') }}">I already have an account</a>
+  </div>
+</form>{% endif %}</div></section>
+{% endblock %}
