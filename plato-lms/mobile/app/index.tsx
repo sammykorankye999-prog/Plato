@@ -5,7 +5,14 @@ import { WebView, type WebViewNavigation } from 'react-native-webview';
 
 const serverUrl = process.env.EXPO_PUBLIC_PLATO_URL?.trim().replace(/\/$/, '') || '';
 const serverHost = serverUrl ? new URL(serverUrl).host : '';
-const localHttp = /^http:\/\/(localhost|127\.0\.0\.1|10\.0\.2\.2|192\.168\.)/.test(serverUrl);
+function isLocalDevelopmentHost(host: string) {
+  if (host === 'localhost' || host === '127.0.0.1' || host === '10.0.2.2') return true;
+  const octets = host.split('.').map(Number);
+  if (octets.length !== 4 || octets.some(value => !Number.isInteger(value) || value < 0 || value > 255)) return false;
+  const [first, second] = octets;
+  return first === 10 || (first === 192 && second === 168) || (first === 172 && second >= 16 && second <= 31);
+}
+const localHttp = serverUrl.startsWith('http://') && isLocalDevelopmentHost(new URL(serverUrl).hostname);
 const invalidHttp = serverUrl.startsWith('http://') && !localHttp;
 
 export default function PlatoMobile() {

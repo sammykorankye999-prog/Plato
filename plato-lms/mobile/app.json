@@ -6,9 +6,18 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
-    "plugins": ["expo-router"],
-    "experiments": { "typedRoutes": true },
-    "android": { "package": "com.plato.lms" },
-    "ios": { "bundleIdentifier": "com.plato.lms" }
+    "plugins": [
+      "expo-router",
+      "expo-status-bar"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "android": {
+      "package": "com.plato.lms"
+    },
+    "ios": {
+      "bundleIdentifier": "com.plato.lms"
+    }
   }
 }
