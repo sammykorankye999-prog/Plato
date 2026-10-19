@@ -10,26 +10,52 @@ This project has an `apprunner.yaml` from an earlier setup. AWS App Runner stopp
 
 Create your AWS account, enable MFA on the root user, create a least-privilege IAM identity for daily work, and set an AWS Budget alert before provisioning resources. ECS/Fargate, the load balancer, database, logs, storage, and data transfer can incur charges.
 
-Install Docker Desktop and AWS CLI, sign in to AWS, and choose a region. Create an Amazon ECR repository named `plato-lms` and an RDS PostgreSQL database in a private subnet. Configure the database security group to allow PostgreSQL traffic only from the ECS task security group. Do not expose the database publicly.
+Use the AWS region `eu-north-1` (Europe/Stockholm) for the database, ECR repository, and ECS service. The RDS PostgreSQL database should stay private. Configure its security group to allow PostgreSQL traffic only from the ECS task security group; do not allow an internet IP range.
 
-### 2. Build and push the backend container
+### 2. Build the backend image on GitHub Actions
 
-Run these commands in PowerShell from the project root. Replace the region with the region where you created ECR:
+This repository includes `.github/workflows/plato-ecr.yml`. GitHub Actions builds the Docker image, so Docker Desktop is not needed on your computer. The workflow uses GitHub's OIDC identity to assume a limited AWS role; it does not need a long-lived AWS access key.
 
-```powershell
-$awsRegion = 'us-east-1'
-$awsAccountId = aws sts get-caller-identity --query Account --output text
-$ecrHost = "$awsAccountId.dkr.ecr.$awsRegion.amazonaws.com"
-$image = "$ecrHost/plato-lms:latest"
+First, create a **private** Amazon ECR repository named `plato-lms` in `eu-north-1`. In IAM, create an OIDC identity provider for `https://token.actions.githubusercontent.com` with audience `sts.amazonaws.com`. Create an IAM role named `GitHubPlatoECRPublisher` with this trust policy, replacing the account ID if needed:
 
-aws ecr create-repository --repository-name plato-lms --region $awsRegion
-aws ecr get-login-password --region $awsRegion | docker login --username AWS --password-stdin $ecrHost
-docker build -t plato-lms:latest .
-docker tag plato-lms:latest $image
-docker push $image
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Principal": {"Federated": "arn:aws:iam::AWS_ACCOUNT_ID:oidc-provider/token.actions.githubusercontent.com"},
+    "Action": "sts:AssumeRoleWithWebIdentity",
+    "Condition": {
+      "StringEquals": {
+        "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+        "token.actions.githubusercontent.com:sub": "repo:sammykorankye999-prog/Plato:ref:refs/heads/main"
+      }
+    }
+  }]
+}
 ```
 
-If ECR already has the repository, skip `create-repository`.
+Attach a permissions policy to that role. Replace `AWS_ACCOUNT_ID` with the account ID and use this JSON:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {"Effect": "Allow", "Action": "ecr:GetAuthorizationToken", "Resource": "*"},
+    {"Effect": "Allow", "Action": ["ecr:BatchCheckLayerAvailability", "ecr:CompleteLayerUpload", "ecr:InitiateLayerUpload", "ecr:PutImage", "ecr:UploadLayerPart"], "Resource": "arn:aws:ecr:eu-north-1:AWS_ACCOUNT_ID:repository/plato-lms"}
+  ]
+}
+```
+
+In the GitHub repository, open **Settings → Secrets and variables → Actions → Variables** and add:
+
+| Variable | Value |
+| --- | --- |
+| `AWS_ROLE_ARN` | `arn:aws:iam::AWS_ACCOUNT_ID:role/GitHubPlatoECRPublisher` |
+| `AWS_REGION` | `eu-north-1` |
+| `ECR_REPOSITORY` | `plato-lms` |
+
+Commit and push the workflow to `main`. It builds and pushes `latest` and a commit-specific image tag to ECR whenever backend files change. Check **GitHub → Plato → Actions** for a green run; choose the `latest` image in ECS Express Mode.
 
 ### 3. Store configuration and deploy
 
