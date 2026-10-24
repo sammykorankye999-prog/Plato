@@ -91,7 +91,7 @@ To register a daily 2:00 AM task for the current Windows user, run this once in 
 
 ## Mobile and desktop
 
-The project includes an Expo mobile app for Android and iOS in [`mobile/`](mobile/). It displays the responsive Flask LMS and shares the same sign-in, MFA, role permissions, courses, and progress data. Follow [`mobile/README.md`](mobile/README.md) to configure the Flask server URL and run it. For an internet-accessible shared backend, follow [`BACKEND_DEPLOYMENT.md`](BACKEND_DEPLOYMENT.md).
+The project includes an Expo web, Android, and iOS client in [`mobile/`](mobile/). It uses native client screens and calls the Flask JSON API; it no longer embeds the server-rendered site in a WebView. Configure the API URL and run/build instructions in [`mobile/README.md`](mobile/README.md). API routes are listed in [`API.md`](API.md), AWS backend setup is in [`BACKEND_DEPLOYMENT.md`](BACKEND_DEPLOYMENT.md), and separate Vercel web hosting is described in [`FRONTEND_DEPLOYMENT.md`](FRONTEND_DEPLOYMENT.md).
 
 The responsive web app can also be installed as a Progressive Web App (PWA) from a supported mobile or desktop browser. It caches only public interface assets; it never caches signed-in pages or user data.
 

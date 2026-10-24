@@ -4,6 +4,10 @@
     "slug": "plato-lms-mobile",
     "scheme": "plato",
     "version": "1.0.0",
+    "web": {
+      "bundler": "metro",
+      "output": "static"
+    },
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "plugins": [

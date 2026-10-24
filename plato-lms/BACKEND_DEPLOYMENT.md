@@ -1,6 +1,6 @@
-# Deploy the Plato backend for web and Expo
+# Deploy the Plato HTTPS API backend
 
-The Flask application serves the desktop site and the pages shown by the Expo mobile app. They share the same backend URL, account sessions, MFA, roles, and database. The container includes `/healthz`, which returns `200` only when the app can reach its configured database.
+The Flask service is the AWS backend and JSON API. The Expo project builds a separate web frontend plus Android/iOS apps; all clients call `/api/v1` over HTTPS. The service includes `/healthz`, which returns `200` only when it can reach its configured database. Legacy server-rendered routes remain during migration.
 
 ## AWS deployment path
 
@@ -59,21 +59,21 @@ Commit and push the workflow to `main`. It builds and pushes `latest` and a comm
 
 ### 3. Store configuration and deploy
 
-In AWS Secrets Manager, create secrets for `SECRET_KEY`, `PASSWORD_PEPPER`, `TOTP_ENCRYPTION_KEY`, `BACKUP_ENCRYPTION_KEY`, `DATABASE_URL`, and `INSTRUCTOR_INVITE_CODE`. Generate distinct random keys for each; use a PostgreSQL SQLAlchemy URL such as `postgresql+psycopg://...` with TLS enabled. Never put secrets in the Docker image or GitHub.
+In AWS Secrets Manager, create secrets for `SECRET_KEY`, `PASSWORD_PEPPER`, `TOTP_ENCRYPTION_KEY`, `BACKUP_ENCRYPTION_KEY`, `DATABASE_URL`, and `INSTRUCTOR_INVITE_CODE`. Generate distinct random keys for each; use a PostgreSQL SQLAlchemy URL such as `postgresql+psycopg://...` with TLS enabled. Never put secrets in the Docker image or GitHub. Set `WEB_APP_ORIGINS` as a normal environment variable to the exact web frontend origin (for example `https://plato.example.com`).
 
 In the AWS Console, open **Amazon ECS → Express mode → Create** and select the ECR image. Configure container port `8080`, health check path `/healthz`, production environment variables `APP_ENV=production`, `COOKIE_SECURE=1`, and `PORT=8080`, plus the Secrets Manager values. Choose the task execution and infrastructure roles. Set the task networking so it can reach the private RDS database; restrict inbound PostgreSQL access to the task security group. Review the price estimate and configuration before creating the service.
 
 Wait for the service to become active and verify its HTTPS URL by opening `/healthz`; it should respond with `{"status":"ok"}`.
 
-### 4. Connect the Expo app
+### 4. Deploy and connect the separate web/mobile clients
 
 In `mobile/.env`, set:
 
 ```dotenv
-EXPO_PUBLIC_PLATO_URL=https://YOUR-ECS-SERVICE-URL
+EXPO_PUBLIC_PLATO_API_URL=https://YOUR-ECS-SERVICE-URL
 ```
 
-Restart Expo after changing the environment file. On a phone, this must be the deployed HTTPS URL (not `localhost`). The Expo app loads the Flask pages; accounts and course data stay in PostgreSQL on the backend. Do not put server secrets in `EXPO_PUBLIC_*` variables.
+Set `EXPO_PUBLIC_PLATO_API_URL` in `mobile/.env`, then build the native Expo app. To produce the separate web client, run `npm.cmd install` then `npx.cmd expo export --platform web` from `mobile/`; deploy `mobile/dist/` as static web hosting. Set the exact deployed web origin in `WEB_APP_ORIGINS`, then redeploy the backend. The web/mobile clients call the JSON API; do not put server secrets in `EXPO_PUBLIC_*` variables.
 
 ### 5. Create the first administrator
 

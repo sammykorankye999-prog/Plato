@@ -4,6 +4,7 @@ import json
 import getpass
 import base64
 import sqlite3
+import hashlib
 from pathlib import Path
 from io import BytesIO
 import click
@@ -11,18 +12,19 @@ from datetime import datetime, timezone
 from functools import wraps
 from urllib.parse import urljoin, urlparse
 
-from flask import (Flask, abort, flash, jsonify, redirect, render_template,
+from flask import (Blueprint, Flask, abort, flash, g, jsonify, redirect, render_template,
                    request, send_from_directory, session, url_for)
 from flask_login import (LoginManager, UserMixin, current_user, login_required,
                          login_user, logout_user)
 from flask_sqlalchemy import SQLAlchemy
 from flask_wtf.csrf import CSRFError, CSRFProtect
-from sqlalchemy import func, inspect, text
+from sqlalchemy import func, inspect, or_, text
 from sqlalchemy.orm import joinedload, selectinload
 from sqlalchemy.exc import IntegrityError
 from markupsafe import Markup, escape
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.middleware.proxy_fix import ProxyFix
+from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from dotenv import load_dotenv
 import pyotp
 import qrcode
@@ -34,20 +36,26 @@ load_dotenv()
 # Configuration
 # --------------------------------------------------------------------------
 app = Flask(__name__)
-if os.environ.get('APP_ENV', 'development').lower() == 'production':
+_is_production = (os.environ.get('APP_ENV', '').lower() == 'production'
+                  or os.environ.get('VERCEL_ENV', '').lower() == 'production')
+if _is_production:
     app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
 _secret = os.environ.get('SECRET_KEY')
 if not _secret or _secret.startswith('replace-with-'):
     raise RuntimeError('Set a unique SECRET_KEY in your private .env file before starting Plato.')
 
+_database_url = os.environ.get('DATABASE_URL', 'sqlite:///plato.db')
+if _is_production and _database_url.startswith('sqlite:'):
+    raise RuntimeError('Production requires a persistent PostgreSQL DATABASE_URL; SQLite is not persistent on Vercel.')
+
 app.config.update(
     SECRET_KEY=_secret,
-    SQLALCHEMY_DATABASE_URI=os.environ.get('DATABASE_URL', 'sqlite:///plato.db'),
+    SQLALCHEMY_DATABASE_URI=_database_url,
     SQLALCHEMY_TRACK_MODIFICATIONS=False,
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE='Lax',
-    SESSION_COOKIE_SECURE=os.environ.get('COOKIE_SECURE') == '1',  # set on HTTPS
+    SESSION_COOKIE_SECURE=_is_production or os.environ.get('COOKIE_SECURE') == '1',
     WTF_CSRF_TIME_LIMIT=None,  # token lasts as long as the session
 )
 
@@ -158,6 +166,20 @@ class ConfigBackup(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     snapshot = db.Column(db.Text, nullable=False)
     created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class ApiSession(db.Model):
+    id = db.Column(db.String(64), primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id', ondelete='CASCADE'), nullable=False, index=True)
+    auth_version = db.Column(db.Integer, nullable=False)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
+    revoked = db.Column(db.Boolean, nullable=False, default=False)
+
+
+class ApiRateLimit(db.Model):
+    bucket = db.Column(db.String(64), primary_key=True)
+    window_started = db.Column(db.DateTime(timezone=True), nullable=False)
+    attempts = db.Column(db.Integer, nullable=False, default=0)
 
 
 DEFAULT_SETTINGS = {
@@ -389,6 +411,485 @@ def health_check():
         db.session.rollback()
         app.logger.exception('Health check could not reach the configured database')
         return jsonify(status='unavailable'), 503
+
+
+# --------------------------------------------------------------------------
+# Versioned JSON API used by the separately deployed Expo web/mobile client.
+# Password verification and TOTP enrollment share the existing User records.
+# --------------------------------------------------------------------------
+api = Blueprint('api_v1', __name__, url_prefix='/api/v1')
+csrf.exempt(api)  # API writes require an Authorization: Bearer token, not cookies.
+api_serializer = URLSafeTimedSerializer(app.config['SECRET_KEY'], salt='plato-api-v1')
+API_ACCESS_SECONDS = 60 * 60 * 12
+API_PREAUTH_SECONDS = 60 * 5
+
+
+def api_error(message, status=400):
+    return jsonify(error=message), status
+
+
+def api_rate_limit(scope, identity, limit, window_seconds):
+    remote = request.remote_addr or 'unknown'
+    key = hashlib.sha256(f'{scope}|{remote}|{identity}'.lower().encode()).hexdigest()
+    now = utcnow()
+    row = db.session.get(ApiRateLimit, key)
+    if row:
+        started = row.window_started
+        if started.tzinfo is None:
+            started = started.replace(tzinfo=timezone.utc)
+        if (now - started).total_seconds() < window_seconds:
+            if row.attempts >= limit:
+                return api_error('Too many attempts. Please wait and try again.', 429)
+            row.attempts += 1
+        else:
+            row.window_started = now
+            row.attempts = 1
+    else:
+        row = ApiRateLimit(bucket=key, window_started=now, attempts=1)
+        db.session.add(row)
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        return api_error('Too many attempts. Please wait and try again.', 429)
+    return None
+
+
+def api_user_json(user):
+    return {'id': user.id, 'username': user.username, 'email': user.email,
+            'role': user.role}
+
+
+def issue_api_token(user):
+    sid = secrets.token_urlsafe(32)
+    db.session.add(ApiSession(id=sid, user_id=user.id,
+                              auth_version=user.auth_version))
+    db.session.commit()
+    token = api_serializer.dumps({'uid': user.id, 'ver': user.auth_version,
+                                  'sid': sid, 'stage': 'full'})
+    return token
+
+
+def api_auth(required=True, stages=('full',)):
+    def decorate(view):
+        @wraps(view)
+        def wrapped(*args, **kwargs):
+            header = request.headers.get('Authorization', '')
+            scheme, _, token = header.partition(' ')
+            if scheme.lower() != 'bearer' or not token:
+                return api_error('Bearer access token required', 401)
+            try:
+                claims = api_serializer.loads(token, max_age=API_ACCESS_SECONDS)
+            except SignatureExpired:
+                return api_error('Access token expired; sign in again', 401)
+            except BadSignature:
+                return api_error('Invalid access token', 401)
+            if claims.get('stage') != 'full':
+                try:
+                    api_serializer.loads(token, max_age=API_PREAUTH_SECONDS)
+                except (SignatureExpired, BadSignature):
+                    return api_error('Two-factor challenge expired; sign in again', 401)
+            if claims.get('stage') not in stages:
+                return api_error('Complete two-factor verification first', 403)
+            user = db.session.get(User, claims.get('uid'))
+            if (not user or not user.is_active or
+                    user.auth_version != claims.get('ver')):
+                return api_error('Account is unavailable; sign in again', 401)
+            if claims.get('stage') == 'full':
+                api_session = db.session.get(ApiSession, claims.get('sid'))
+                if (not api_session or api_session.revoked or
+                        api_session.user_id != user.id or
+                        api_session.auth_version != user.auth_version):
+                    return api_error('Access token revoked; sign in again', 401)
+            g.api_user = user
+            g.api_claims = claims
+            return view(*args, **kwargs)
+        return wrapped
+    return decorate
+
+
+def api_instructor(view):
+    @wraps(view)
+    @api_auth()
+    def wrapped(*args, **kwargs):
+        if g.api_user.role != 'instructor':
+            return api_error('Instructor role required', 403)
+        return view(*args, **kwargs)
+    return wrapped
+
+
+def api_admin(view):
+    @wraps(view)
+    @api_auth()
+    def wrapped(*args, **kwargs):
+        if g.api_user.role != 'admin':
+            return api_error('Administrator role required', 403)
+        return view(*args, **kwargs)
+    return wrapped
+
+
+@api.get('/health')
+def api_health():
+    return jsonify(status='ok', api_version=1)
+
+
+@api.post('/auth/register')
+def api_register():
+    data = request.get_json(silent=True) or {}
+    username = str(data.get('username', '')).strip()
+    email = str(data.get('email', '')).strip().lower()
+    password = data.get('password', '')
+    role = data.get('role', 'student')
+    invite = str(data.get('invite_code', ''))
+    limited = api_rate_limit('register', email or username, 5, 3600)
+    if limited:
+        return limited
+    if get_setting('registration_enabled') != 'true':
+        return api_error('Registration is currently closed', 403)
+    if not 3 <= len(username) <= 80 or '@' not in email or len(email) > 120:
+        return api_error('Enter a valid username and email')
+    if not isinstance(password, str) or len(password) < PASSWORD_MIN:
+        return api_error(f'Password must be at least {PASSWORD_MIN} characters')
+    if role not in ('student', 'instructor'):
+        return api_error('Choose student or instructor')
+    if role == 'instructor' and get_setting('instructor_signup_enabled') != 'true':
+        return api_error('Instructor registration is currently closed', 403)
+    if role == 'instructor' and not (INSTRUCTOR_INVITE_CODE and
+            secrets.compare_digest(invite, INSTRUCTOR_INVITE_CODE)):
+        return api_error('A valid instructor invite code is required', 403)
+    if User.query.filter(or_(User.username == username, User.email == email)).first():
+        return api_error('Username or email already exists', 409)
+    user = User(username=username, email=email, role=role)
+    user.set_password(password)
+    db.session.add(user)
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        return api_error('Username or email already exists', 409)
+    return jsonify(message='Account created. Sign in to set up two-factor authentication.'), 201
+
+
+@api.post('/auth/login')
+def api_login():
+    data = request.get_json(silent=True) or {}
+    identity = str(data.get('username', '')).strip()
+    limited = api_rate_limit('login', identity, 10, 900)
+    if limited:
+        return limited
+    password = data.get('password', '')
+    user = User.query.filter(or_(User.username == identity,
+                                 User.email == identity.lower())).first()
+    if not user or not user.is_active or not isinstance(password, str) or not user.check_password(password):
+        return api_error('Invalid username/email or password', 401)
+    if user.totp_enabled:
+        token = api_serializer.dumps({'uid': user.id, 'ver': user.auth_version,
+                                      'stage': 'verify'})
+        return jsonify(mfa_required=True, challenge_token=token)
+    secret = totp_secret_for(user) or pyotp.random_base32()
+    set_totp_secret(user, secret)
+    db.session.commit()
+    token = api_serializer.dumps({'uid': user.id, 'ver': user.auth_version,
+                                  'stage': 'setup'})
+    uri = pyotp.TOTP(secret).provisioning_uri(name=user.username,
+                                              issuer_name='Plato LMS')
+    return jsonify(mfa_setup_required=True, challenge_token=token,
+                   secret=secret, provisioning_uri=uri,
+                   qr_data=totp_qr_data(secret, user.username))
+
+
+@api.post('/auth/verify-totp')
+@api_auth(stages=('verify', 'setup'))
+def api_verify_totp():
+    data = request.get_json(silent=True) or {}
+    code = ''.join(c for c in str(data.get('code', '')) if c.isdigit())
+    user = g.api_user
+    limited = api_rate_limit('totp', str(user.id), 5, 300)
+    if limited:
+        return limited
+    secret = totp_secret_for(user)
+    if not secret or not pyotp.TOTP(secret).verify(code, valid_window=1):
+        return api_error('Invalid or expired authenticator code', 401)
+    if g.api_claims['stage'] == 'setup':
+        user.totp_enabled = True
+        db.session.commit()
+    access_token = issue_api_token(user)
+    return jsonify(access_token=access_token, user=api_user_json(user))
+
+
+@api.post('/auth/logout')
+@api_auth()
+def api_logout():
+    api_session = db.session.get(ApiSession, g.api_claims['sid'])
+    api_session.revoked = True
+    db.session.commit()
+    return jsonify(message='Signed out')
+
+
+@api.get('/me')
+@api_auth()
+def api_me():
+    return jsonify(user=api_user_json(g.api_user))
+
+
+def api_course_json(course, user):
+    owner = course.instructor_id == user.id
+    enrolled = is_enrolled(user, course.id)
+    can_view = owner or enrolled or user.role == 'admin'
+    result = {'id': course.id, 'title': course.title,
+              'description': course.description or '', 'instructor_id': course.instructor_id,
+              'instructor': course.instructor.username if course.instructor else None,
+              'enrolled': enrolled, 'is_owner': owner}
+    if can_view:
+        done_ids = set(db.session.query(LessonProgress.lesson_id).filter_by(
+            student_id=user.id).all()) if user.role == 'student' else set()
+        result['lessons'] = [{'id': lesson.id, 'title': lesson.title,
+                              'content': lesson.content or '',
+                              'completed': (lesson.id,) in done_ids}
+                             for lesson in course.lessons]
+        result['progress'] = progress_for(user.id, [course.id]).get(course.id)
+    else:
+        result['lesson_count'] = len(course.lessons)
+    return result
+
+
+@api.get('/courses')
+@api_auth()
+def api_courses():
+    user = g.api_user
+    if user.role == 'instructor':
+        courses = Course.query.filter_by(instructor_id=user.id).order_by(Course.id.desc()).all()
+    elif user.role == 'admin':
+        courses = Course.query.order_by(Course.id.desc()).all()
+    else:
+        courses = Course.query.join(Enrollment, Enrollment.course_id == Course.id).filter(
+            Enrollment.student_id == user.id).order_by(Course.id.desc()).all()
+    all_courses = Course.query.order_by(Course.id.desc()).all() if user.role == 'student' else []
+    return jsonify(courses=[api_course_json(course, user) for course in courses],
+                   available_courses=[{'id': c.id, 'title': c.title,
+                                       'description': c.description or '',
+                                       'instructor': c.instructor.username if c.instructor else None}
+                                      for c in all_courses if not is_enrolled(user, c.id)])
+
+
+@api.get('/courses/<int:course_id>')
+@api_auth()
+def api_course_detail(course_id):
+    course = db.get_or_404(Course, course_id)
+    return jsonify(course=api_course_json(course, g.api_user))
+
+
+@api.post('/courses')
+@api_instructor
+def api_create_course():
+    data = request.get_json(silent=True) or {}
+    title = clean_title(data.get('title'))
+    description = clean_description(data.get('description', ''))
+    if not title or description is None:
+        return api_error('Title or description is invalid')
+    course = Course(title=title, description=description,
+                    instructor_id=g.api_user.id)
+    db.session.add(course)
+    db.session.commit()
+    return jsonify(course=api_course_json(course, g.api_user)), 201
+
+
+@api.post('/courses/<int:course_id>/enroll')
+@api_auth()
+def api_enroll(course_id):
+    user = g.api_user
+    if user.role != 'student':
+        return api_error('Only students can enroll', 403)
+    course = db.get_or_404(Course, course_id)
+    if is_enrolled(user, course.id):
+        return jsonify(message='Already enrolled')
+    db.session.add(Enrollment(student_id=user.id, course_id=course.id))
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+    return jsonify(message='Enrolled successfully')
+
+
+@api.post('/courses/<int:course_id>/lessons')
+@api_instructor
+def api_add_lesson(course_id):
+    course = db.get_or_404(Course, course_id)
+    if course.instructor_id != g.api_user.id:
+        return api_error('You do not own this course', 403)
+    data = request.get_json(silent=True) or {}
+    title = clean_title(data.get('title'))
+    content = str(data.get('content', ''))
+    if not title or len(content) > 50000:
+        return api_error('Lesson title or content is invalid')
+    lesson = Lesson(title=title, content=content, course_id=course.id)
+    db.session.add(lesson)
+    db.session.commit()
+    return jsonify(lesson={'id': lesson.id, 'title': lesson.title,
+                           'content': lesson.content}), 201
+
+
+@api.post('/lessons/<int:lesson_id>/complete')
+@api_auth()
+def api_complete_lesson(lesson_id):
+    user = g.api_user
+    lesson = db.get_or_404(Lesson, lesson_id)
+    if not is_enrolled(user, lesson.course_id):
+        return api_error('Enroll in the course to track progress', 403)
+    row = LessonProgress.query.filter_by(student_id=user.id, lesson_id=lesson.id).first()
+    data = request.get_json(silent=True) or {}
+    completed = bool(data.get('completed', True))
+    if completed and not row:
+        db.session.add(LessonProgress(student_id=user.id, lesson_id=lesson.id))
+    elif not completed and row:
+        db.session.delete(row)
+    db.session.commit()
+    return jsonify(completed=completed,
+                   progress=progress_for(user.id, [lesson.course_id])[lesson.course_id])
+
+
+@api.get('/admin/summary')
+@api_admin
+def api_admin_summary():
+    users = User.query.order_by(User.id).all()
+    return jsonify(users=[{**api_user_json(user), 'is_deleted': user.is_deleted,
+                           'totp_enabled': user.totp_enabled}
+                          for user in users],
+                   settings=current_app_settings(),
+                   counts={'students': User.query.filter_by(role='student', is_deleted=False).count(),
+                           'instructors': User.query.filter_by(role='instructor', is_deleted=False).count(),
+                           'admins': User.query.filter_by(role='admin', is_deleted=False).count(),
+                           'courses': Course.query.count()})
+
+
+@api.patch('/admin/users/<int:user_id>')
+@api_admin
+def api_admin_update_user(user_id):
+    user = db.get_or_404(User, user_id)
+    data = request.get_json(silent=True) or {}
+    if 'role' in data:
+        role = data['role']
+        if role not in ('student', 'instructor', 'admin'):
+            return api_error('Invalid role')
+        if user.id == g.api_user.id and role != 'admin':
+            return api_error('You cannot remove your own admin role', 400)
+        if user.role == 'admin' and role != 'admin' and not user.is_deleted and User.query.filter_by(role='admin', is_deleted=False).count() <= 1:
+            return api_error('Cannot remove the last active administrator', 400)
+        user.role = role
+    if 'is_deleted' in data:
+        if user.id == g.api_user.id and data['is_deleted']:
+            return api_error('You cannot deactivate your own account', 400)
+        if data['is_deleted']:
+            if user.role == 'admin' and not user.is_deleted and User.query.filter_by(role='admin', is_deleted=False).count() <= 1:
+                return api_error('Cannot deactivate the last active administrator', 400)
+            user.is_deleted = True
+            user.deleted_at = utcnow()
+            user.auth_version += 1
+        else:
+            user.is_deleted = False
+            user.deleted_at = None
+            user.auth_version += 1
+    db.session.commit()
+    return jsonify(user={**api_user_json(user), 'is_deleted': user.is_deleted})
+
+
+@api.post('/admin/users')
+@api_admin
+def api_admin_create_user():
+    data = request.get_json(silent=True) or {}
+    username = str(data.get('username', '')).strip()
+    email = str(data.get('email', '')).strip().lower()
+    password = data.get('password', '')
+    role = data.get('role', 'student')
+    if not 3 <= len(username) <= 80 or '@' not in email or len(email) > 120 or not isinstance(password, str) or len(password) < PASSWORD_MIN or role not in ('student', 'instructor', 'admin'):
+        return api_error('Invalid account fields')
+    if User.query.filter(or_(User.username == username, User.email == email)).first():
+        return api_error('Username or email already exists', 409)
+    user = User(username=username, email=email, role=role)
+    user.set_password(password)
+    db.session.add(user)
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        return api_error('Username or email already exists', 409)
+    return jsonify(user=api_user_json(user)), 201
+
+
+@api.post('/admin/users/<int:user_id>/reset-mfa')
+@api_admin
+def api_admin_reset_mfa(user_id):
+    user = db.get_or_404(User, user_id)
+    if user.id == g.api_user.id:
+        return api_error('Use another administrator account to reset your own MFA', 400)
+    user.totp_secret = None
+    user.totp_enabled = False
+    user.auth_version += 1
+    db.session.commit()
+    return jsonify(message='MFA reset; user must enroll a new authenticator at next login')
+
+
+@api.patch('/admin/settings')
+@api_admin
+def api_admin_update_settings():
+    data = request.get_json(silent=True) or {}
+    if not data or set(data) - set(DEFAULT_SETTINGS) or any(type(v) is not bool for v in data.values()):
+        return api_error('Provide valid boolean setting values')
+    for key, value in data.items():
+        save_setting(key, value)
+    db.session.commit()
+    return jsonify(settings=current_app_settings())
+
+
+@api.post('/admin/config-backups')
+@api_admin
+def api_create_config_backup():
+    backup = ConfigBackup(snapshot=json.dumps(current_app_settings(), sort_keys=True))
+    db.session.add(backup)
+    db.session.commit()
+    return jsonify(message='Configuration backup created', id=backup.id), 201
+
+
+@api.post('/admin/config-backups/restore-latest')
+@api_admin
+def api_restore_config_backup():
+    backup = ConfigBackup.query.order_by(ConfigBackup.created_at.desc()).first()
+    if not backup:
+        return api_error('No configuration backup is available', 404)
+    try:
+        settings = json.loads(backup.snapshot)
+        if set(settings) != set(DEFAULT_SETTINGS) or any(type(v) is not bool for v in settings.values()):
+            raise ValueError
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return api_error('Latest configuration backup is invalid', 400)
+    for key, value in settings.items():
+        save_setting(key, value)
+    db.session.commit()
+    return jsonify(message='Configuration restored; learning records were not changed',
+                   settings=current_app_settings())
+
+
+@app.after_request
+def api_cors_headers(response):
+    if request.path.startswith('/api/v1/'):
+        allowed = {origin.strip() for origin in os.environ.get('WEB_APP_ORIGINS', '').split(',') if origin.strip()}
+        origin = request.headers.get('Origin')
+        if origin and origin in allowed:
+            response.headers['Access-Control-Allow-Origin'] = origin
+            response.headers['Vary'] = 'Origin'
+            response.headers['Access-Control-Allow-Headers'] = 'Authorization, Content-Type'
+            response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PATCH, OPTIONS'
+            response.headers['Access-Control-Max-Age'] = '600'
+    return response
+
+
+@api.route('/<path:_path>', methods=['OPTIONS'])
+@api.route('/', methods=['OPTIONS'])
+def api_preflight(_path=None):
+    return '', 204
+
+
+app.register_blueprint(api)
 
 
 @app.route('/service-worker.js')
