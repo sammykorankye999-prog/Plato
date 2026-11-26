@@ -1,18 +1,35 @@
-# Deploy the web frontend separately from the AWS API
+# Deploy the Plato website on Vercel
 
-The Expo project in `mobile/` builds the web frontend and native Android/iOS clients. The Flask app and PostgreSQL database belong on AWS. For Vercel, import the GitHub repository and set **Root Directory** to `plato-lms/mobile` so Vercel builds the Expo frontend, not Flask.
+The Plato browser app is the Expo web client in `plato-lms/mobile/`. This deploys its web build to Vercel; the same Expo project can still build Android and iOS apps separately. The Flask API and database remain on Render.
 
-In Vercel **Settings → Build and Deployment**, use:
+## 1. Confirm the Render API is ready
 
-- Framework preset: **Other** (or Expo, if Vercel detects it)
-- Build command: `npx expo export --platform web`
-- Output directory: `dist`
-- Install command: `npm install`
+Open the Render service URL followed by `/healthz`, for example `https://YOUR-SERVICE.onrender.com/healthz`. Continue when it returns `{"status":"ok"}`. Copy the base service URL without `/healthz` or a trailing slash. If it is not healthy yet, fix the Render deployment first; the website cannot sign in until the API works.
 
-Under **Settings → Environment Variables**, add `EXPO_PUBLIC_PLATO_API_URL` with the AWS HTTPS service origin, for example `https://your-aws-service.example.com`. It is a public URL; do not put backend secrets here. Redeploy after setting it.
+## 2. Import the website into Vercel
 
-After the Vercel domain is assigned, add that exact origin to `WEB_APP_ORIGINS` in the AWS backend configuration, for example `https://plato-web.vercel.app`, then redeploy the backend. This allows browser requests to the API. Do not use `*` for allowed origins.
+In Vercel, choose **Add New → Project**, import `sammykorankye999-prog/Plato`, and configure the project:
 
-For Android/iOS, set the same `EXPO_PUBLIC_PLATO_API_URL` in `mobile/.env` when building the Expo app. The phone app calls AWS directly and does not use the Vercel web hosting URL.
+- **Root Directory:** `plato-lms/mobile`
+- **Framework Preset:** Other
+- **Install Command:** `npm install`
+- **Build Command:** `npx expo export --platform web`
+- **Output Directory:** `dist`
 
-If Vercel reports a Flask import or `SECRET_KEY` error, its **Root Directory** is probably set to `plato-lms` instead of `plato-lms/mobile`; correct it and redeploy.
+Under **Environment Variables**, add this for **Production** (and Preview if you will use preview deployments):
+
+| Name | Value |
+| --- | --- |
+| `EXPO_PUBLIC_PLATO_API_URL` | Your Render service base URL, e.g. `https://YOUR-SERVICE.onrender.com` |
+
+This URL is public and belongs in the browser app. Do not add database passwords, pepper, encryption keys, or other backend secrets to Vercel. Click **Deploy**. When it finishes, open the Vercel domain and check that the page loads.
+
+## 3. Allow the Vercel website to call the API
+
+In the Render dashboard, open the Flask API service → **Environment**. Set `WEB_APP_ORIGINS` to the exact Vercel website origin, such as `https://plato-lms.vercel.app` (no path and no trailing slash). Save the change and redeploy/restart the Render service. If you use a custom domain, include that exact origin too, separated by commas.
+
+## 4. Verify
+
+Open the Vercel site, sign in or create an account, and confirm the API-backed pages load. In browser developer tools, requests should go to the Render service URL. If the page loads but API calls fail, check that `EXPO_PUBLIC_PLATO_API_URL` is correct and that `WEB_APP_ORIGINS` exactly matches the browser's address bar.
+
+The web frontend is static. Authentication, roles, MFA, and database access remain in the Render API; never put server secrets in `EXPO_PUBLIC_*` variables. The Expo phone app uses the same API URL when it is built, but is deployed separately through Expo's mobile build process.

@@ -105,7 +105,7 @@ export default function PlatoMobile() {
 
   if (!API_URL) return <SafeAreaView style={styles.page}><View style={styles.panel}>
     <Text style={styles.brand}>PLATO<Text style={styles.gold}>.</Text></Text><Text style={styles.heading}>Backend address required</Text>
-    <Text style={styles.body}>Set EXPO_PUBLIC_PLATO_API_URL in mobile/.env to your AWS HTTPS backend URL, then restart Expo.</Text>
+    <Text style={styles.body}>Set EXPO_PUBLIC_PLATO_API_URL to your Render API's HTTPS address in the Vercel environment settings, then redeploy.</Text>
   </View></SafeAreaView>;
 
   if (!token || !user) return <SafeAreaView style={styles.page}><ScrollView contentContainerStyle={styles.container}>
