@@ -26,6 +26,6 @@ npx.cmd expo export --platform web
 
 The static web client is written to `dist/`. For Vercel, set its project root to `plato-lms/mobile`, use `npx expo export --platform web` as the build command, and `dist` as the output directory. Add the Vercel site's exact HTTPS origin to the Render backend's `WEB_APP_ORIGINS` variable for browser CORS. Mobile app requests do not require browser CORS. See [the Vercel website deployment guide](../FRONTEND_DEPLOYMENT.md).
 
-The client supports account registration, password sign-in, first-time TOTP QR enrollment, MFA verification, course lists and lessons, student enrollment/progress, instructor course creation, and administrator user/configuration controls. The access token is held in app memory and users sign in again after closing/restarting the app.
+The client supports account registration, password sign-in, first-time TOTP QR enrollment, MFA verification, email password reset, course lists and lessons, student enrollment/progress, instructor course creation, and administrator user/configuration controls. Password recovery uses one-time 30-minute email links; it preserves any authenticator enrollment. The access token is held in app memory and users sign in again after closing/restarting the app.
 
 See [the API reference](../API.md) and [the backend deployment guide](../BACKEND_DEPLOYMENT.md).

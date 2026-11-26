@@ -5,12 +5,15 @@ import getpass
 import base64
 import sqlite3
 import hashlib
+import smtplib
+import ssl
 from pathlib import Path
 from io import BytesIO
+from email.message import EmailMessage
 import click
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from functools import wraps
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urlencode, urljoin, urlparse
 
 from flask import (Blueprint, Flask, abort, flash, g, jsonify, redirect, render_template,
                    request, send_from_directory, session, url_for)
@@ -79,6 +82,14 @@ try:
     BACKUP_CIPHER = Fernet(_backup_key.encode('ascii'))
 except (ValueError, UnicodeEncodeError):
     raise RuntimeError('Set BACKUP_ENCRYPTION_KEY to a valid Fernet key in your private .env file.')
+
+PASSWORD_RESET_URL = os.environ.get('PASSWORD_RESET_URL', '').strip()
+SMTP_HOST = os.environ.get('SMTP_HOST', '').strip()
+SMTP_PORT = int(os.environ.get('SMTP_PORT', '587'))
+SMTP_USERNAME = os.environ.get('SMTP_USERNAME', '').strip()
+SMTP_PASSWORD = os.environ.get('SMTP_PASSWORD', '')
+SMTP_FROM = os.environ.get('SMTP_FROM', SMTP_USERNAME).strip()
+SMTP_USE_SSL = os.environ.get('SMTP_USE_SSL', '').lower() in ('1', 'true', 'yes')
 
 db = SQLAlchemy(app)
 csrf = CSRFProtect(app)
@@ -180,6 +191,15 @@ class ApiRateLimit(db.Model):
     bucket = db.Column(db.String(64), primary_key=True)
     window_started = db.Column(db.DateTime(timezone=True), nullable=False)
     attempts = db.Column(db.Integer, nullable=False, default=0)
+
+
+class PasswordResetToken(db.Model):
+    token_hash = db.Column(db.String(64), primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id', ondelete='CASCADE'),
+                        nullable=False, index=True)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
+    expires_at = db.Column(db.DateTime(timezone=True), nullable=False)
+    used_at = db.Column(db.DateTime(timezone=True))
 
 
 DEFAULT_SETTINGS = {
@@ -533,6 +553,43 @@ def api_health():
     return jsonify(status='ok', api_version=1)
 
 
+def deliver_password_reset_email(user, reset_link):
+    if not (SMTP_HOST and SMTP_FROM and PASSWORD_RESET_URL):
+        app.logger.error('Password reset email is not configured; set SMTP_* and PASSWORD_RESET_URL.')
+        return False
+
+    message = EmailMessage()
+    message['Subject'] = 'Reset your Plato password'
+    message['From'] = SMTP_FROM
+    message['To'] = user.email
+    message.set_content(
+        f"Hello {user.username},\n\n"
+        "Use this one-time link to choose a new Plato password. It expires in 30 minutes:\n\n"
+        f"{reset_link}\n\n"
+        "If you did not request this, you can ignore this email. Your password will not change.\n"
+    )
+
+    try:
+        if SMTP_USE_SSL:
+            with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT,
+                                  context=ssl.create_default_context(), timeout=20) as smtp:
+                if SMTP_USERNAME:
+                    smtp.login(SMTP_USERNAME, SMTP_PASSWORD)
+                smtp.send_message(message)
+        else:
+            with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as smtp:
+                smtp.ehlo()
+                smtp.starttls(context=ssl.create_default_context())
+                smtp.ehlo()
+                if SMTP_USERNAME:
+                    smtp.login(SMTP_USERNAME, SMTP_PASSWORD)
+                smtp.send_message(message)
+        return True
+    except Exception:
+        app.logger.exception('Password reset email delivery failed')
+        return False
+
+
 @api.post('/auth/register')
 def api_register():
     data = request.get_json(silent=True) or {}
@@ -568,6 +625,71 @@ def api_register():
         db.session.rollback()
         return api_error('Username or email already exists', 409)
     return jsonify(message='Account created. Sign in to set up two-factor authentication.'), 201
+
+
+@api.post('/auth/request-password-reset')
+def api_request_password_reset():
+    data = request.get_json(silent=True) or {}
+    email = str(data.get('email', '')).strip().lower()
+    limited = api_rate_limit('password-reset-request', email or 'missing-email', 5, 3600)
+    if limited:
+        return limited
+    if not (SMTP_HOST and SMTP_FROM and PASSWORD_RESET_URL):
+        return api_error('Password recovery email is not configured. Please contact the administrator.', 503)
+
+    user = User.query.filter_by(email=email, is_deleted=False).first() if email else None
+    if user:
+        raw_token = secrets.token_urlsafe(32)
+        token_hash = hashlib.sha256(raw_token.encode('utf-8')).hexdigest()
+        reset_token = PasswordResetToken(
+            token_hash=token_hash,
+            user_id=user.id,
+            expires_at=utcnow() + timedelta(minutes=30),
+        )
+        db.session.add(reset_token)
+        db.session.commit()
+        separator = '&' if '?' in PASSWORD_RESET_URL else '?'
+        reset_link = f'{PASSWORD_RESET_URL}{separator}{urlencode({"token": raw_token})}'
+        if not deliver_password_reset_email(user, reset_link):
+            reset_token.used_at = utcnow()
+            db.session.commit()
+
+    # Identical response for existing and unknown addresses prevents account enumeration.
+    return jsonify(message='If an account exists for that email, a password reset link will be sent.'), 200
+
+
+@api.post('/auth/reset-password')
+def api_reset_password():
+    limited = api_rate_limit('password-reset-complete', request.remote_addr or 'unknown', 10, 900)
+    if limited:
+        return limited
+    data = request.get_json(silent=True) or {}
+    raw_token = str(data.get('token', '')).strip()
+    password = data.get('password', '')
+    if not isinstance(password, str) or len(password) < PASSWORD_MIN:
+        return api_error(f'Password must be at least {PASSWORD_MIN} characters')
+    if not raw_token or len(raw_token) > 256:
+        return api_error('This password reset link is invalid or expired.', 400)
+
+    token_hash = hashlib.sha256(raw_token.encode('utf-8')).hexdigest()
+    reset_token = db.session.get(PasswordResetToken, token_hash)
+    if not reset_token or reset_token.used_at:
+        return api_error('This password reset link is invalid or expired.', 400)
+    expires_at = reset_token.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at <= utcnow():
+        return api_error('This password reset link is invalid or expired.', 400)
+
+    user = db.session.get(User, reset_token.user_id)
+    if not user or not user.is_active:
+        return api_error('This password reset link is invalid or expired.', 400)
+    user.set_password(password)
+    user.auth_version += 1  # invalidate any outstanding API tokens/sessions
+    reset_token.used_at = utcnow()
+    db.session.commit()
+    # Existing TOTP enrollment is intentionally retained; reset does not bypass MFA.
+    return jsonify(message='Password updated. Sign in with your new password and authenticator code.'), 200
 
 
 @api.post('/auth/login')

@@ -25,6 +25,7 @@ export default function PlatoMobile() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [registerMode, setRegisterMode] = useState(false);
+  const [forgotMode, setForgotMode] = useState(false);
   const [accountRole, setAccountRole] = useState<'student' | 'instructor'>('student');
   const [inviteCode, setInviteCode] = useState('');
   const [code, setCode] = useState('');
@@ -82,6 +83,15 @@ export default function PlatoMobile() {
     finally { setBusy(false); }
   }
 
+  async function requestPasswordReset() {
+    setBusy(true); setMessage('');
+    try {
+      const result = await api('/auth/request-password-reset', undefined, 'POST', { email });
+      setMessage(result.message || 'If an account exists for that email, a password reset link will be sent.');
+    } catch (error) { setMessage(error instanceof Error ? error.message : 'Could not request a password reset'); }
+    finally { setBusy(false); }
+  }
+
   async function verifyCode() {
     setBusy(true); setMessage('');
     try {
@@ -112,8 +122,13 @@ export default function PlatoMobile() {
     <View style={styles.panel}>
       <Text style={styles.brand}>PLATO<Text style={styles.gold}>.</Text></Text>
       <Text style={styles.eyebrow}>YOUR LEARNING SPACE</Text>
-      <Text style={styles.heading}>{challenge ? (qr ? 'Set up two-factor' : 'Verify your identity') : registerMode ? 'Create your account' : 'Welcome back'}</Text>
-      {challenge ? <>
+      <Text style={styles.heading}>{forgotMode ? 'Reset your password' : challenge ? (qr ? 'Set up two-factor' : 'Verify your identity') : registerMode ? 'Create your account' : 'Welcome back'}</Text>
+      {forgotMode ? <>
+        <Text style={styles.body}>Enter your account email. If an account exists, we’ll send a secure reset link.</Text>
+        <TextInput style={styles.input} placeholder="Email address" autoCapitalize="none" keyboardType="email-address" value={email} onChangeText={setEmail} />
+        <Action label="Send reset link" onPress={requestPasswordReset} disabled={busy || !email.includes('@')} />
+        <Pressable onPress={() => { setForgotMode(false); setMessage(''); }}><Text style={styles.link}>Back to sign in</Text></Pressable>
+      </> : challenge ? <>
         {qr ? <><Text style={styles.body}>Scan this QR code with an authenticator app such as Google Authenticator or Microsoft Authenticator.</Text><Image source={{ uri: qr }} style={styles.qr} /></> : null}
         <TextInput style={styles.input} placeholder="Six-digit authenticator code" keyboardType="number-pad" value={code} onChangeText={setCode} maxLength={8} />
         <Action label="Verify code" onPress={verifyCode} disabled={busy || code.length < 6} />
@@ -126,7 +141,8 @@ export default function PlatoMobile() {
         </>}
         <TextInput style={styles.input} placeholder="Password" secureTextEntry value={password} onChangeText={setPassword} />
         <Action label={registerMode ? 'Create account' : 'Sign in'} onPress={registerMode ? register : signIn} disabled={busy || !username || password.length < (registerMode ? 12 : 1) || (registerMode && !email)} />
-        <Pressable onPress={() => { setRegisterMode(!registerMode); setMessage(''); }}><Text style={styles.link}>{registerMode ? 'Already registered? Sign in' : 'New here? Create an account'}</Text></Pressable>
+        {!registerMode && <Pressable onPress={() => { setEmail(username.includes('@') ? username : ''); setForgotMode(true); setMessage(''); }}><Text style={styles.link}>Forgot password?</Text></Pressable>}
+        <Pressable onPress={() => { setRegisterMode(!registerMode); setForgotMode(false); setMessage(''); }}><Text style={styles.link}>{registerMode ? 'Already registered? Sign in' : 'New here? Create an account'}</Text></Pressable>
       </>}
       {busy ? <ActivityIndicator color="#1e6554" style={styles.spinner} /> : null}
       {!!message && <Text accessibilityRole="alert" style={styles.message}>{message}</Text>}
