@@ -590,6 +590,47 @@ def deliver_password_reset_email(user, reset_link):
         return False
 
 
+def create_password_reset_request(email):
+    """Create and email a one-time reset link when the account exists."""
+    if not (SMTP_HOST and SMTP_FROM and PASSWORD_RESET_URL):
+        return False
+    user = User.query.filter_by(email=email, is_deleted=False).first() if email else None
+    if user:
+        raw_token = secrets.token_urlsafe(32)
+        token_hash = hashlib.sha256(raw_token.encode('utf-8')).hexdigest()
+        reset_token = PasswordResetToken(
+            token_hash=token_hash,
+            user_id=user.id,
+            expires_at=utcnow() + timedelta(minutes=30),
+        )
+        db.session.add(reset_token)
+        db.session.commit()
+        separator = '&' if '?' in PASSWORD_RESET_URL else '?'
+        reset_link = f'{PASSWORD_RESET_URL}{separator}{urlencode({"token": raw_token})}'
+        if not deliver_password_reset_email(user, reset_link):
+            reset_token.used_at = utcnow()
+            db.session.commit()
+    return True
+
+
+def find_valid_password_reset_token(raw_token):
+    if not raw_token or len(raw_token) > 256:
+        return None, None
+    token_hash = hashlib.sha256(raw_token.encode('utf-8')).hexdigest()
+    reset_token = db.session.get(PasswordResetToken, token_hash)
+    if not reset_token or reset_token.used_at:
+        return None, None
+    expires_at = reset_token.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at <= utcnow():
+        return None, None
+    user = db.session.get(User, reset_token.user_id)
+    if not user or not user.is_active:
+        return None, None
+    return reset_token, user
+
+
 @api.post('/auth/register')
 def api_register():
     data = request.get_json(silent=True) or {}
@@ -634,25 +675,8 @@ def api_request_password_reset():
     limited = api_rate_limit('password-reset-request', email or 'missing-email', 5, 3600)
     if limited:
         return limited
-    if not (SMTP_HOST and SMTP_FROM and PASSWORD_RESET_URL):
+    if not create_password_reset_request(email):
         return api_error('Password recovery email is not configured. Please contact the administrator.', 503)
-
-    user = User.query.filter_by(email=email, is_deleted=False).first() if email else None
-    if user:
-        raw_token = secrets.token_urlsafe(32)
-        token_hash = hashlib.sha256(raw_token.encode('utf-8')).hexdigest()
-        reset_token = PasswordResetToken(
-            token_hash=token_hash,
-            user_id=user.id,
-            expires_at=utcnow() + timedelta(minutes=30),
-        )
-        db.session.add(reset_token)
-        db.session.commit()
-        separator = '&' if '?' in PASSWORD_RESET_URL else '?'
-        reset_link = f'{PASSWORD_RESET_URL}{separator}{urlencode({"token": raw_token})}'
-        if not deliver_password_reset_email(user, reset_link):
-            reset_token.used_at = utcnow()
-            db.session.commit()
 
     # Identical response for existing and unknown addresses prevents account enumeration.
     return jsonify(message='If an account exists for that email, a password reset link will be sent.'), 200
@@ -671,18 +695,8 @@ def api_reset_password():
     if not raw_token or len(raw_token) > 256:
         return api_error('This password reset link is invalid or expired.', 400)
 
-    token_hash = hashlib.sha256(raw_token.encode('utf-8')).hexdigest()
-    reset_token = db.session.get(PasswordResetToken, token_hash)
-    if not reset_token or reset_token.used_at:
-        return api_error('This password reset link is invalid or expired.', 400)
-    expires_at = reset_token.expires_at
-    if expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=timezone.utc)
-    if expires_at <= utcnow():
-        return api_error('This password reset link is invalid or expired.', 400)
-
-    user = db.session.get(User, reset_token.user_id)
-    if not user or not user.is_active:
+    reset_token, user = find_valid_password_reset_token(raw_token)
+    if not reset_token:
         return api_error('This password reset link is invalid or expired.', 400)
     user.set_password(password)
     user.auth_version += 1  # invalidate any outstanding API tokens/sessions
@@ -1132,6 +1146,53 @@ def login():
             return redirect(url_for('mfa_setup'))
         flash('Invalid credentials', 'error')
     return render_template('login.html')
+
+
+@app.route('/forgot-password', methods=['GET', 'POST'])
+def forgot_password():
+    if request.method == 'POST':
+        email = request.form.get('email', '').strip().lower()
+        limited = api_rate_limit('web-password-reset-request', email or 'missing-email', 5, 3600)
+        if limited:
+            flash('Too many reset requests. Please wait and try again.', 'error')
+            return redirect(url_for('forgot_password'))
+        if not (SMTP_HOST and SMTP_FROM and PASSWORD_RESET_URL):
+            flash('Password reset email is not configured yet. Please contact the site administrator.', 'error')
+        elif not email or '@' not in email:
+            flash('Enter a valid email address.', 'error')
+        else:
+            create_password_reset_request(email)
+            flash('If an account exists for that email, a reset link will be sent. Check your inbox and spam folder.', 'success')
+            return redirect(url_for('login'))
+    return render_template('forgot_password.html')
+
+
+@app.route('/reset-password', methods=['GET', 'POST'])
+def reset_password():
+    raw_token = request.values.get('token', '').strip()
+    reset_token, user = find_valid_password_reset_token(raw_token)
+    if not reset_token:
+        flash('This password reset link is invalid or expired. Request a new one.', 'error')
+        return redirect(url_for('forgot_password'))
+    if request.method == 'POST':
+        limited = api_rate_limit('web-password-reset-complete', request.remote_addr or 'unknown', 10, 900)
+        if limited:
+            flash('Too many attempts. Please wait and try again.', 'error')
+            return redirect(url_for('forgot_password'))
+        password = request.form.get('password', '')
+        confirmation = request.form.get('confirm_password', '')
+        if len(password) < PASSWORD_MIN:
+            flash(f'Password must be at least {PASSWORD_MIN} characters.', 'error')
+        elif password != confirmation:
+            flash('The passwords do not match.', 'error')
+        else:
+            user.set_password(password)
+            user.auth_version += 1
+            reset_token.used_at = utcnow()
+            db.session.commit()
+            flash('Password updated. Sign in with your new password and authenticator code.', 'success')
+            return redirect(url_for('login'))
+    return render_template('reset_password.html', token=raw_token, password_min=PASSWORD_MIN)
 
 
 @app.route('/mfa/setup', methods=['GET', 'POST'])

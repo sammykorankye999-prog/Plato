@@ -12,6 +12,8 @@ Base path: `/api/v1`. Set `EXPO_PUBLIC_PLATO_API_URL` to the backend origin (wit
 4. `POST /auth/request-password-reset` accepts `{ "email" }` and returns the same generic message whether or not the account exists. It emails a single-use link that expires after 30 minutes. `POST /auth/reset-password` accepts `{ "token", "password" }`; the new password must be at least 12 characters. Reset links require the SMTP and `PASSWORD_RESET_URL` settings in Render. Password reset preserves TOTP enrollment.
 5. Send `Authorization: Bearer <access_token>` for protected endpoints. `POST /auth/logout` revokes that API session. Access tokens are signed, time-limited, and checked against account status and `auth_version`.
 
+The server-rendered Flask website also provides `GET/POST /forgot-password` and `GET/POST /reset-password` for browser password recovery. The email link must point to the same site’s `/reset-password` page. Both browser forms use CSRF protection; reset tokens are single-use and expire after 30 minutes.
+
 ## Routes
 
 | Method | Path | Access |

@@ -34,6 +34,7 @@ In the new project, open **Settings → Environment Variables** and add these fo
 | `SMTP_PASSWORD` | Existing SMTP password/API key |
 | `SMTP_FROM` | Existing allowed sender address |
 | `SMTP_USE_SSL` | `0` for STARTTLS on port 587; `1` for SSL on port 465 |
+| `PASSWORD_RESET_URL` | `https://YOUR-VERCEL-DOMAIN/reset-password` |
 
 Do not add `WEB_APP_ORIGINS`; the server-rendered Flask website and its form submissions share the same Vercel origin. Do not add any `EXPO_PUBLIC_*` variables to this Flask project.
 
@@ -44,4 +45,4 @@ After saving the variables, deploy the new project. Use the Vercel URL it assign
 - This creates another deployment; it does not move the Render service or automatically change the existing Expo Vercel project.
 - Both deployments will connect to the same Supabase database, so they show the same user and course records.
 - Changing `SECRET_KEY`, `PASSWORD_PEPPER`, or `TOTP_ENCRYPTION_KEY` from the values already used by Render can invalidate sessions or prevent existing password/MFA data from working. Copy the exact existing values.
-- The current server-rendered Flask login supports two-factor authentication. Password reset UI currently exists in the Expo client; the Flask templates do not yet provide a forgot-password form. Configure the reset flow separately before promising password recovery on this Flask site.
+- The server-rendered Flask login supports two-factor authentication and password reset pages at `/forgot-password` and `/reset-password`.

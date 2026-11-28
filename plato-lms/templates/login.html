@@ -13,5 +13,5 @@
   <input id="password" name="password" type="password" required autocomplete="current-password">
 
   <button class="btn full-width" type="submit">Sign in <span aria-hidden="true">→</span></button>
-</form><p class="auth-switch">New to Plato? <a href="{{ url_for('register') }}">Create an account</a></p></div></section>
+</form><p class="auth-switch"><a href="{{ url_for('forgot_password') }}">Forgot password?</a></p><p class="auth-switch">New to Plato? <a href="{{ url_for('register') }}">Create an account</a></p></div></section>
 {% endblock %}
